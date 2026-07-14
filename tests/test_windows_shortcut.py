@@ -207,6 +207,16 @@ class WindowsShortcutFilesTests(unittest.TestCase):
         self.assertIn('$fastBrokerDefault = $true', branch)
         self.assertIn('$cliArgs = @("debug") + $translatedArgs', branch)
 
+    def test_quick_shortcuts_start_the_broker_and_use_one_canonical_command(self) -> None:
+        source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(
+            encoding="utf-8"
+        )
+        branch = source.split(
+            '{ $_ -in @("quick", "deploy") } {', maxsplit=1
+        )[1].split("}", maxsplit=1)[0]
+        self.assertIn('$fastBrokerDefault = $true', branch)
+        self.assertIn('$cliArgs = @("quick") + $translatedArgs', branch)
+
     def test_call_shortcut_forwards_quote_free_payload_fields_as_plain_argv(self) -> None:
         source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(
             encoding="utf-8"

@@ -5,8 +5,8 @@
 
 .DESCRIPTION
   Ordinary commands use a one-shot WSL process by default. Auto mode reuses a
-  healthy local broker only after it was explicitly started; fast/q, accept,
-  ui-accept, and debug select On automatically, while Off always stays
+  healthy local broker only after it was explicitly started; fast/q, quick,
+  accept, ui-accept, and debug select On automatically, while Off always stays
   one-shot. For the fastest repeated edit
   and debug loop, enter ``shell`` once and run ``msys debug`` (or ``m debug``)
   inside it. First-time key authentication deliberately stays interactive.
@@ -551,6 +551,11 @@ switch ($Command.ToLowerInvariant()) {
         $cliArgs = @("debug") + $translatedArgs
         break
     }
+    { $_ -in @("quick", "deploy") } {
+        $fastBrokerDefault = $true
+        $cliArgs = @("quick") + $translatedArgs
+        break
+    }
     { $_ -in @("fast", "q") } {
         $fastBrokerDefault = $true
         $fastArgs = @($translatedArgs)
@@ -678,8 +683,8 @@ if ($brokerMode -notin @("auto", "on", "off")) {
 
 # Key setup and initial password authentication require a real interactive
 # stdin. Auto only reuses a healthy explicitly started broker; it never starts
-# one. The fast/q, accept, ui-accept, and debug workflows select On when no
-# explicit -Broker value was given; other commands retain Auto. Off always
+# one. The fast/q, quick, accept, ui-accept, and debug workflows select On when
+# no explicit -Broker value was given; other commands retain Auto. Off always
 # uses one-shot WSL.
 $actionName = $Command.ToLowerInvariant()
 $requiresInteractiveWsl = $interactiveShell -or $actionName -in @(

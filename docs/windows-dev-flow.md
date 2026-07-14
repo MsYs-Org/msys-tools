@@ -117,8 +117,8 @@ by default, so repeated snapshots do not recreate WSL. To manage it explicitly:
 .\msys.cmd broker stop
 ```
 
-Auto never starts a broker on its own. `fast`/`q`, `accept`, `ui-accept`, and
-`debug` select On automatically; `-Broker On` starts/requires one, while
+Auto never starts a broker on its own. `fast`/`q`, `quick`/`deploy`, `accept`,
+`ui-accept`, and `debug` select On automatically; `-Broker On` starts/requires one, while
 `-Broker Off` always selects one-shot WSL. The broker binds only to
 `127.0.0.1` and is token-gated from a state file under the current user's
 `%LOCALAPPDATA%\MSYS\dev-brokers`; it does not expose a device service or accept

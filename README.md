@@ -166,8 +166,9 @@ The default run path already waits for Core readiness, so `quick` does not add
 a duplicate status call. `--status` selects status-only behavior instead of
 starting another runtime; `quick` never stops or restarts an existing one.
 
-For an occasional command, `.\msys.cmd debug` uses a simple one-shot WSL
-process by default. The optional safe broker is opt-in:
+For repeated commands, `.\msys.cmd debug` starts or reuses the loopback-only
+local broker by default, so each snapshot does not start WSL again. The broker
+can still be managed explicitly:
 
 ```powershell
 .\msys.cmd broker start # Auto now reuses this healthy broker
@@ -177,8 +178,9 @@ process by default. The optional safe broker is opt-in:
 ```
 
 Auto mode never starts a broker; it only reuses one created explicitly by
-`broker start`. The `fast`/`q` and `accept` shortcuts select On automatically unless an
-explicit broker mode is supplied. `-Broker On` starts/requires it, and `-Broker Off` always uses
+`broker start`. The `fast`/`q`, `quick`/`deploy`, `accept`, `ui-accept`, and
+`debug` shortcuts select On automatically unless an explicit broker mode is
+supplied. `-Broker On` starts/requires it, and `-Broker Off` always uses
 one-shot WSL. The broker listener is strictly `127.0.0.1`, its per-session
 token stays in the current user's
 `%LOCALAPPDATA%\MSYS\dev-brokers` state file, and it receives an argument array
@@ -207,7 +209,7 @@ and `connect` deliberately use an interactive one-shot WSL command because an
 SSH password prompt needs a real terminal. If a workstation cannot use
 localhost forwarding, keep the default Auto mode without starting a broker,
 or choose `-Broker Off`/`MSYS_DEV_BROKER=Off` explicitly. The frequent
-`fast`, `accept`, `ui-accept`, and `debug` paths start or reuse the local broker
+`fast`, `quick`, `accept`, `ui-accept`, and `debug` paths start or reuse the local broker
 automatically, so repeated PowerShell commands do not repeatedly start WSL.
 `-Distro NAME` selects a non-default WSL distribution. For a nonstandard mount,
 set `MSYS_WSL_WORKSPACE` to the absolute Linux workspace path.
