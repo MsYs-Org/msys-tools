@@ -210,8 +210,14 @@ class FakeP0Runtime:
                 return returned(
                     {
                         "ok": True,
-                        "dismissed": "input-method",
-                        "window_id": "msys.x11-window.v1:input-method",
+                        "schema": "msys.navigation-action.v1",
+                        "action": "back",
+                        "input": "debug",
+                        "result": {
+                            "ok": True,
+                            "dismissed": "input-method",
+                            "window_id": "msys.x11-window.v1:input-method",
+                        },
                     }
                 )
             if self.foreground:

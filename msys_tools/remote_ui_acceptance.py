@@ -582,9 +582,14 @@ def run_p0_ui_acceptance(
             None,
         )
 
+        def navigation_result(payload: dict[str, Any]) -> dict[str, Any]:
+            nested = payload.get("result")
+            return nested if isinstance(nested, dict) else payload
+
         def back_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+            result = navigation_result(payload)
             return {
-                key: payload.get(key)
+                key: result.get(key)
                 for key in (
                     "ok",
                     "dismissed",
@@ -593,7 +598,7 @@ def run_p0_ui_acceptance(
                     "reason",
                     "window_id",
                 )
-                if payload.get(key) is not None
+                if result.get(key) is not None
             }
 
         first_back = rpc(
@@ -603,11 +608,12 @@ def run_p0_ui_acceptance(
             "back.close",
         )
         back_actions = [back_evidence(first_back)]
-        if first_back.get("dismissed") is not None:
-            if first_back.get("dismissed") != "input-method":
+        first_back_result = navigation_result(first_back)
+        if first_back_result.get("dismissed") is not None:
+            if first_back_result.get("dismissed") != "input-method":
                 raise P0UIAcceptanceError(
                     "back.close dismissed an unexpected overlay: "
-                    f"{first_back.get('dismissed')}"
+                    f"{first_back_result.get('dismissed')}"
                 )
             wait(
                 "back.input-method-hidden",
