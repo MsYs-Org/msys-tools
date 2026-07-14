@@ -4332,6 +4332,22 @@ def command_release_switch(
             file=sys.stderr,
         )
         return baseline.returncode or 1
+    target = release_id if action == "activate" else status.get("previous")
+    if not isinstance(target, str) or not target:
+        print(
+            "release: cannot health-check rollback without a previous release",
+            file=sys.stderr,
+        )
+        return 2
+    target_verification = _remote_release_command(ctx, root, "verify", [target])
+    if target_verification.returncode != 0:
+        _print_completed_output(target_verification, error=True)
+        print(
+            "release: target release "
+            f"{target!r} failed verification; refusing to stop the service or switch pointers",
+            file=sys.stderr,
+        )
+        return target_verification.returncode or 1
     launcher = f"{root}/service/msys-service"
     prerequisite = ssh_capture(
         ctx,
@@ -4375,7 +4391,7 @@ def command_release_switch(
         print_json(
             {
                 "release_switch": action,
-                "current": release_id if action == "activate" else "previous",
+                "current": target,
                 "service_restarted": True,
                 "healthy": True,
             }

@@ -144,13 +144,15 @@ python -m msys_tools.dev release stage 2026.07.12-2 \
   --activate --restart-service --keep 3 --health-timeout 120
 ```
 
-Before it stops the managed formal service, the tool re-hashes the exact release
-currently selected by `current`. If that baseline verification fails, it does
-not stop the service, change either pointer, or attempt an automatic fallback;
-the release tree must be treated as an integrity incident rather than a
-known-good recovery base. If verification succeeds, the tool records that exact
-release, atomically changes the pointer, restarts it, and uses the normal
-runtime readiness probe. If the candidate fails, it stops the candidate,
+Before it stops the managed formal service, the tool re-hashes both the exact
+release currently selected by `current` and the requested activation target (or
+the release selected by `previous` for rollback). If either verification fails,
+it does not stop the service, change either pointer, or attempt an automatic
+fallback; the release tree must be treated as an integrity incident rather than
+a known-good current or recovery target. If verification succeeds, the tool
+records the exact current release, atomically changes the pointer, restarts it,
+and uses the normal runtime readiness probe. If the candidate fails, it stops
+the candidate,
 reactivates that exact verified id, starts it, and reports both candidate and
 recovery health. It does not broaden authority to another process or runtime.
 The readiness deadline defaults to 90 seconds to cover cold display and HAL

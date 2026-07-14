@@ -116,6 +116,7 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
                 "_remote_release_command",
                 side_effect=[
                     completed(0, '{"verified":true}\n'),
+                    completed(0, '{"verified":true}\n'),
                     completed(0, '{"current":"candidate"}\n'),
                     completed(0, '{"current":"known-good"}\n'),
                 ],
@@ -146,7 +147,7 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
             ("verify", ["known-good"]),
         )
         self.assertEqual(
-            release_command.call_args_list[2].args[2:],
+            release_command.call_args_list[3].args[2:],
             ("activate", ["known-good"]),
         )
         self.assertIn('"restored_healthy": true', output.getvalue())
@@ -196,6 +197,93 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
         lifecycle_command.assert_not_called()
         self.assertIn("content digest changed", stderr.getvalue())
         self.assertIn("refusing to stop the service or switch pointers", stderr.getvalue())
+
+    def test_unverified_rollback_target_fails_before_service_or_pointer_change(self) -> None:
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                dev,
+                "_release_status_document",
+                return_value={"current": "known-good", "previous": "damaged"},
+            ),
+            mock.patch.object(
+                dev,
+                "_remote_release_command",
+                side_effect=[
+                    completed(0, '{"verified":true}\n'),
+                    completed(2, "release damaged content digest changed\n"),
+                ],
+            ) as release_command,
+            mock.patch.object(dev, "ssh_capture") as ssh_capture,
+            mock.patch.object(dev, "_remote_lifecycle_command") as lifecycle_command,
+            redirect_stderr(stderr),
+        ):
+            result = dev.command_release_switch(
+                self.context,
+                "/opt/msys",
+                "rollback",
+                None,
+                restart_service=True,
+                runtime_dir="/tmp/msys-main",
+                log_file="/tmp/msysd.log",
+            )
+
+        self.assertEqual(result, 2)
+        self.assertEqual(
+            [call.args[2:] for call in release_command.call_args_list],
+            [("verify", ["known-good"]), ("verify", ["damaged"])],
+        )
+        ssh_capture.assert_not_called()
+        lifecycle_command.assert_not_called()
+        self.assertIn("target release 'damaged' failed verification", stderr.getvalue())
+        self.assertIn("refusing to stop the service or switch pointers", stderr.getvalue())
+
+    def test_successful_health_checked_rollback_reports_actual_release_id(self) -> None:
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                dev,
+                "_release_status_document",
+                return_value={"current": "release-2", "previous": "release-1"},
+            ),
+            mock.patch.object(
+                dev,
+                "_remote_release_command",
+                side_effect=[
+                    completed(0, '{"verified":true}\n'),
+                    completed(0, '{"verified":true}\n'),
+                    completed(0, '{"current":"release-1","previous":"release-2"}\n'),
+                ],
+            ),
+            mock.patch.object(
+                dev,
+                "ssh_capture",
+                side_effect=[
+                    completed(),
+                    completed(0, "stopped\n"),
+                    completed(0, "started\n"),
+                ],
+            ),
+            mock.patch.object(
+                dev,
+                "_remote_lifecycle_command",
+                return_value=completed(0, '{"healthy":true}\n'),
+            ),
+            redirect_stdout(output),
+        ):
+            result = dev.command_release_switch(
+                self.context,
+                "/opt/msys",
+                "rollback",
+                None,
+                restart_service=True,
+                runtime_dir="/tmp/msys-main",
+                log_file="/tmp/msysd.log",
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIn('"current": "release-1"', output.getvalue())
+        self.assertNotIn('"current": "previous"', output.getvalue())
 
     def test_stage_forwards_health_timeout_to_activated_release(self) -> None:
         with (
