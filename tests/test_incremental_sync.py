@@ -60,6 +60,10 @@ class IncrementalSyncTests(unittest.TestCase):
         self.assertTrue(rsync)
         self.assertEqual(fingerprints, {"msys-sdk": digest})
         capture.assert_called_once()
+        self.assertIn(
+            "mkdir -p '/opt/msys-dev' '/opt/msys-dev/.sync'",
+            capture.call_args.args[1],
+        )
         self.assertIn(".msys-dev-source.sha256", capture.call_args.args[1])
 
     def test_matching_remote_fingerprint_skips_upload_and_build(self) -> None:
@@ -82,7 +86,7 @@ class IncrementalSyncTests(unittest.TestCase):
                 result = dev.command_sync(context, ["msys-sdk"])
 
         self.assertEqual(result, 0)
-        self.assertEqual(ssh.call_count, 1)  # one mkdir/probe setup, no staging swap
+        ssh.assert_not_called()
         run_local.assert_not_called()
 
     def test_sdk_sync_rebuilds_target_archive_before_atomic_swap(self) -> None:

@@ -151,8 +151,8 @@ It does not run `doctor` or another full validation pass by default:
 ```
 
 Repository sync now records one deterministic source fingerprint only after a
-successful atomic swap. The next `sync`/`quick` probes all selected markers and
-target `rsync` availability in one SSH call, then skips upload and native build
+successful atomic swap. The next `sync`/`quick` prepares its staging directory,
+probes all selected markers, and detects target `rsync` in one SSH call, then skips upload and native build
 for exact matches. Cache/VCS files excluded by sync are excluded from the hash;
 source content, paths, symlinks, empty directories, file sizes, and executable
 bits are included. Use `--full-sync` only to repair a manually altered remote
@@ -164,7 +164,9 @@ development tree:
 
 The default run path already waits for Core readiness, so `quick` does not add
 a duplicate status call. `--status` selects status-only behavior instead of
-starting another runtime; `quick` never stops or restarts an existing one.
+starting another runtime. When combined with `--screenshot`, health and PNG are
+returned by one bounded SSH report instead of a status call plus capture/SCP/
+cleanup calls. `quick` never stops or restarts an existing runtime.
 
 For repeated commands, `.\msys.cmd debug` starts or reuses the loopback-only
 local broker by default, so each snapshot does not start WSL again. The broker

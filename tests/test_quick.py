@@ -25,7 +25,7 @@ class QuickCommandTests(unittest.TestCase):
             mock.patch.object(dev, "command_sync", return_value=0) as sync,
             mock.patch.object(dev, "command_run", return_value=0) as run,
             mock.patch.object(dev, "command_status") as status,
-            mock.patch.object(dev, "command_screenshot") as screenshot,
+            mock.patch.object(dev, "command_fast_report") as fast_report,
         ):
             result = dev.command_quick(
                 self.context(),
@@ -54,9 +54,9 @@ class QuickCommandTests(unittest.TestCase):
         )
         doctor.assert_not_called()
         status.assert_not_called()
-        screenshot.assert_not_called()
+        fast_report.assert_not_called()
 
-    def test_safe_status_and_screenshot_are_one_ordered_thin_composition(self) -> None:
+    def test_safe_status_and_screenshot_use_one_fast_report(self) -> None:
         calls: list[str] = []
 
         def completed(name: str):
@@ -71,10 +71,12 @@ class QuickCommandTests(unittest.TestCase):
             mock.patch.object(dev, "command_doctor", side_effect=completed("doctor")),
             mock.patch.object(dev, "command_sync", side_effect=completed("sync")),
             mock.patch.object(dev, "command_run") as run,
-            mock.patch.object(dev, "command_status", side_effect=completed("status")),
             mock.patch.object(
-                dev, "command_screenshot", side_effect=completed("screenshot")
-            ) as screenshot,
+                dev, "command_status", side_effect=completed("status")
+            ) as status,
+            mock.patch.object(
+                dev, "command_fast_report", side_effect=completed("fast-report")
+            ) as fast_report,
         ):
             result = dev.command_quick(
                 self.context(),
@@ -92,17 +94,59 @@ class QuickCommandTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 0)
-        self.assertEqual(calls, ["doctor", "sync", "status", "screenshot"])
+        self.assertEqual(calls, ["doctor", "sync", "fast-report"])
         run.assert_not_called()
-        screenshot.assert_called_once_with(
+        status.assert_not_called()
+        fast_report.assert_called_once_with(
             self.context(),
             "/tmp/quick",
-            output,
+            "/tmp/quick.log",
+            lines=0,
+            screenshot=output,
             display=":77",
             backend="scrot",
             timeout=8.0,
             force=True,
         )
+
+    def test_status_without_screenshot_keeps_existing_status_command(self) -> None:
+        calls: list[str] = []
+
+        def completed(name: str):
+            def run(*_args: object, **_kwargs: object) -> int:
+                calls.append(name)
+                return 0
+
+            return run
+
+        with (
+            mock.patch.object(dev, "command_sync", side_effect=completed("sync")),
+            mock.patch.object(dev, "command_run") as run,
+            mock.patch.object(
+                dev, "command_status", side_effect=completed("status")
+            ) as status,
+            mock.patch.object(dev, "command_fast_report") as fast_report,
+        ):
+            result = dev.command_quick(
+                self.context(),
+                ["msys-settings"],
+                safe=False,
+                profile="desktop-spi",
+                runtime_dir="/tmp/main",
+                log_file="/tmp/main.log",
+                status_only=True,
+                screenshot=None,
+                display=None,
+                backend="auto",
+                timeout=15.0,
+                force=False,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, ["sync", "status"])
+        run.assert_not_called()
+        status.assert_called_once_with(self.context(), "/tmp/main")
+        fast_report.assert_not_called()
 
     def test_failed_gate_or_sync_stops_before_later_mutations(self) -> None:
         with (
@@ -110,7 +154,7 @@ class QuickCommandTests(unittest.TestCase):
             mock.patch.object(dev, "command_sync") as sync,
             mock.patch.object(dev, "command_run") as run,
             mock.patch.object(dev, "command_status") as status,
-            mock.patch.object(dev, "command_screenshot") as screenshot,
+            mock.patch.object(dev, "command_fast_report") as fast_report,
         ):
             result = dev.command_quick(
                 self.context(),
@@ -131,7 +175,7 @@ class QuickCommandTests(unittest.TestCase):
         sync.assert_not_called()
         run.assert_not_called()
         status.assert_not_called()
-        screenshot.assert_not_called()
+        fast_report.assert_not_called()
 
     def test_full_sync_is_an_explicit_passthrough_not_another_workflow(self) -> None:
         with (
@@ -162,7 +206,7 @@ class QuickCommandTests(unittest.TestCase):
             mock.patch.object(dev, "command_sync", return_value=9),
             mock.patch.object(dev, "command_run") as run,
             mock.patch.object(dev, "command_status") as status,
-            mock.patch.object(dev, "command_screenshot") as screenshot,
+            mock.patch.object(dev, "command_fast_report") as fast_report,
         ):
             result = dev.command_quick(
                 self.context(),
@@ -183,7 +227,7 @@ class QuickCommandTests(unittest.TestCase):
         doctor.assert_not_called()
         run.assert_not_called()
         status.assert_not_called()
-        screenshot.assert_not_called()
+        fast_report.assert_not_called()
 
     def test_cli_routes_quick_and_deploy_alias_without_transport(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

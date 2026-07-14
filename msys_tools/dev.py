@@ -354,9 +354,11 @@ def remote_sync_probe(
     ctx: Context,
     repositories: list[str],
 ) -> tuple[bool, dict[str, str]]:
-    """Read rsync capability and all active source markers in one SSH call."""
+    """Prepare sync storage and read all active markers in one SSH call."""
 
+    sync_root = f"{ctx.remote}/.sync"
     commands = [
+        f"mkdir -p {quote_sh(ctx.remote)} {quote_sh(sync_root)}",
         "if command -v rsync >/dev/null 2>&1; then rsync=1; else rsync=0; fi",
         f"printf '{SYNC_FINGERPRINT_PREFIX}\\trsync\\t%s\\n' \"$rsync\"",
     ]
@@ -1316,7 +1318,6 @@ def command_sync(ctx: Context, repos: list[str], *, force: bool = False) -> int:
         return 2
 
     sync_root = f"{ctx.remote}/.sync"
-    ssh(ctx, f"mkdir -p {quote_sh(ctx.remote)} {quote_sh(sync_root)}")
     remote_has_rsync, remote_fingerprints = remote_sync_probe(
         ctx, [path.name for path in paths]
     )
@@ -4060,9 +4061,7 @@ def command_quick(
     if status != 0:
         return status
 
-    if status_only:
-        status = command_status(ctx, runtime_dir)
-    else:
+    if not status_only:
         status = command_run(
             ctx,
             profile,
@@ -4071,19 +4070,23 @@ def command_quick(
             ctx.remote_python,
             timeout,
         )
-    if status != 0:
-        return status
+        if status != 0:
+            return status
 
     if screenshot is not None:
-        return command_screenshot(
+        return command_fast_report(
             ctx,
             runtime_dir,
-            screenshot,
+            log_file,
+            lines=0,
+            screenshot=screenshot,
             display=display,
             backend=backend,
             timeout=timeout,
             force=force,
         )
+    if status_only:
+        return command_status(ctx, runtime_dir)
     return 0
 
 

@@ -99,11 +99,13 @@ runtime instead of starting one, and `--screenshot [PATH]` for a final capture:
 
 After the first successful atomic sync, a deterministic source fingerprint
 lets later calls skip an unchanged repository's upload and target-native build.
-All selected markers and `rsync` capability are read in one SSH probe. Use
+Staging-directory preparation, all selected markers, and `rsync` capability are
+handled in one SSH probe. Use
 `--full-sync` only when repairing a manually modified remote development tree.
 
 It never stops or restarts a running runtime. The default `run` already waits
-for readiness, so no redundant status request is added.
+for readiness, so no redundant status request is added. `--status --screenshot`
+returns health and the PNG through one bounded SSH report.
 
 `debug` executes the runtime health snapshot and log tail in one SSH command;
 `debug --follow` keeps that same connection open. Like `fast`, `accept`, and
