@@ -102,7 +102,15 @@ SYNC_FINGERPRINT_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 SYNC_FINGERPRINT_PREFIX = "__MSYS_SYNC_V1__"
 SYNC_FINGERPRINT_MARKER = ".msys-dev-source.sha256"
 SYNC_EXCLUDED_DIRECTORIES = frozenset(
-    {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+    {
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "build",
+        "dist",
+    }
 )
 X11_DISPLAY_PATTERN = re.compile(r"^:[0-9]+(?:\.[0-9]+)?$")
 REMOTE_SCREENSHOT_PATTERN = re.compile(
@@ -1358,6 +1366,8 @@ def command_sync(ctx: Context, repos: list[str], *, force: bool = False) -> int:
                 "--exclude", ".pytest_cache/",
                 "--exclude", ".mypy_cache/",
                 "--exclude", ".ruff_cache/",
+                "--exclude", "build/",
+                "--exclude", "dist/",
                 "--exclude", "*.pyc",
                 str(path) + "/",
                 f"{ctx.target}:{staging}/",
@@ -1372,6 +1382,8 @@ def command_sync(ctx: Context, repos: list[str], *, force: bool = False) -> int:
                     "--exclude=.pytest_cache",
                     "--exclude=.mypy_cache",
                     "--exclude=.ruff_cache",
+                    "--exclude=build",
+                    "--exclude=dist",
                     "--exclude=*.pyc",
                     "-cf", str(archive),
                     "-C", str(path),
@@ -1391,7 +1403,40 @@ def command_sync(ctx: Context, repos: list[str], *, force: bool = False) -> int:
                 except Exception:
                     ssh(ctx, f"rm -f {quote_sh(remote_archive)}", check=False)
                     raise
-        if path.name == "msys-core":
+        if path.name == "msys-sdk":
+            static_library = f"{staging}/build/libmsys-mipc.a"
+            build = ssh_capture(
+                ctx,
+                "set -eu; "
+                f"cd {quote_sh(staging)}; "
+                "command -v make >/dev/null 2>&1; "
+                "command -v cc >/dev/null 2>&1; "
+                "command -v ar >/dev/null 2>&1; "
+                # Never reuse an uploaded workstation archive/object.  The
+                # staging tree is target-built before it can replace the
+                # active SDK consumed by Native Shell/HAL builds.
+                "MAKEFLAGS= MFLAGS= make -j1 clean; "
+                "MAKEFLAGS= MFLAGS= make -j1 "
+                "CFLAGS='-Os -g0 -DNDEBUG -ffunction-sections -fdata-sections "
+                "-std=c11 -Wall -Wextra -Wpedantic -Werror' all check; "
+                f"test -f {quote_sh(static_library)}; "
+                f"test ! -L {quote_sh(static_library)}",
+                display_command="<build C SDK in atomic target staging tree>",
+            )
+            if build.returncode != 0:
+                if build.stdout:
+                    print(
+                        build.stdout,
+                        end="" if build.stdout.endswith("\n") else "\n",
+                        file=sys.stderr,
+                    )
+                print(
+                    "sync: target C SDK build failed; the previous remote "
+                    "repository was left active",
+                    file=sys.stderr,
+                )
+                return build.returncode or 1
+        elif path.name == "msys-core":
             native_core = f"{staging}/native/build/msysd-native-lite"
             build = ssh_capture(
                 ctx,

@@ -29,9 +29,14 @@ class IncrementalSyncTests(unittest.TestCase):
             cache.mkdir()
             cached = cache / "main.pyc"
             cached.write_bytes(b"ignored")
+            build = repository / "build"
+            build.mkdir()
+            workstation_object = build / "mipc.o"
+            workstation_object.write_bytes(b"x86")
 
             first = dev.repository_fingerprint(repository)
             cached.write_bytes(b"still ignored")
+            workstation_object.write_bytes(b"different workstation build")
             self.assertEqual(dev.repository_fingerprint(repository), first)
             source.write_text("second\n", encoding="utf-8")
             self.assertNotEqual(dev.repository_fingerprint(repository), first)
@@ -79,6 +84,37 @@ class IncrementalSyncTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(ssh.call_count, 1)  # one mkdir/probe setup, no staging swap
         run_local.assert_not_called()
+
+    def test_sdk_sync_rebuilds_target_archive_before_atomic_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / "msys-sdk"
+            repository.mkdir()
+            (repository / "Makefile").write_text("all:\n\t@true\n", encoding="utf-8")
+            context = self.context(root)
+            captures = [
+                subprocess.CompletedProcess([], 1, stdout=""),
+                subprocess.CompletedProcess([], 0, stdout="built\n"),
+            ]
+            with (
+                mock.patch.object(dev, "ssh_capture", side_effect=captures) as capture,
+                mock.patch.object(dev.shutil, "which", return_value=None),
+                mock.patch.object(dev, "run_local"),
+                mock.patch.object(dev, "ssh") as ssh,
+            ):
+                result = dev.command_sync(context, ["msys-sdk"])
+
+        self.assertEqual(result, 0)
+        build_command = capture.call_args_list[1].args[1]
+        self.assertIn("make -j1 clean", build_command)
+        self.assertIn("make -j1", build_command)
+        self.assertIn("all check", build_command)
+        self.assertIn("build/libmsys-mipc.a", build_command)
+        finalise = ssh.call_args_list[-1].args[1]
+        self.assertIn(
+            "mv '/opt/msys-dev/.sync/msys-sdk.new' '/opt/msys-dev/msys-sdk'",
+            finalise,
+        )
 
 
 if __name__ == "__main__":
