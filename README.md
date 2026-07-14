@@ -206,7 +206,9 @@ paths and passes every ordinary `msys-dev` command through unchanged. `key`
 and `connect` deliberately use an interactive one-shot WSL command because an
 SSH password prompt needs a real terminal. If a workstation cannot use
 localhost forwarding, keep the default Auto mode without starting a broker,
-or choose `-Broker Off`/`MSYS_DEV_BROKER=Off` explicitly.
+or choose `-Broker Off`/`MSYS_DEV_BROKER=Off` explicitly. The frequent
+`fast`, `accept`, `ui-accept`, and `debug` paths start or reuse the local broker
+automatically, so repeated PowerShell commands do not repeatedly start WSL.
 `-Distro NAME` selects a non-default WSL distribution. For a nonstandard mount,
 set `MSYS_WSL_WORKSPACE` to the absolute Linux workspace path.
 

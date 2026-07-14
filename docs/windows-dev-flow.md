@@ -106,8 +106,9 @@ It never stops or restarts a running runtime. The default `run` already waits
 for readiness, so no redundant status request is added.
 
 `debug` executes the runtime health snapshot and log tail in one SSH command;
-`debug --follow` keeps that same connection open. An occasional
-`.\msys.cmd debug` uses one-shot WSL by default. To opt into the local broker:
+`debug --follow` keeps that same connection open. Like `fast`, `accept`, and
+`ui-accept`, `.\msys.cmd debug` starts or reuses the loopback-only local broker
+by default, so repeated snapshots do not recreate WSL. To manage it explicitly:
 
 ```powershell
 .\msys.cmd broker start
@@ -116,8 +117,9 @@ for readiness, so no redundant status request is added.
 .\msys.cmd broker stop
 ```
 
-Auto never starts a broker on its own. `fast`/`q` and `accept` select On automatically;
-`-Broker On` starts/requires one, while `-Broker Off` always selects one-shot WSL. The broker binds only to
+Auto never starts a broker on its own. `fast`/`q`, `accept`, `ui-accept`, and
+`debug` select On automatically; `-Broker On` starts/requires one, while
+`-Broker Off` always selects one-shot WSL. The broker binds only to
 `127.0.0.1` and is token-gated from a state file under the current user's
 `%LOCALAPPDATA%\MSYS\dev-brokers`; it does not expose a device service or accept
 shell text, and its secret is not placed in a WSL command line. Each request

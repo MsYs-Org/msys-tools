@@ -12,7 +12,7 @@ import json
 import os
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from .remote_ctl import call
@@ -29,6 +29,9 @@ MAX_LOG_BYTES = 512 * 1024
 MAX_LOG_LINES = 1000
 DAEMON_SESSION_PATTERN = re.compile(r"^msysd: public control socket(?:\s|$)")
 ISOLATION_AUDIT_PREFIX = "msysd: isolation "
+CORE_VERSION_PATTERN = re.compile(
+    r"^__version__\s*=\s*(['\"])([^'\"]+)\1\s*$", re.MULTILINE
+)
 
 CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
     "settings": ("org.msys.settings:",),
@@ -351,6 +354,114 @@ def current_release() -> str | None:
     return Path(target).name or None
 
 
+def _process_snapshot(pid: int) -> tuple[list[str], dict[str, str]]:
+    process = Path("/proc") / str(pid)
+    argv = [
+        item.decode("utf-8", "replace")
+        for item in process.joinpath("cmdline").read_bytes().split(b"\0")
+        if item
+    ]
+    environment: dict[str, str] = {}
+    for item in process.joinpath("environ").read_bytes().split(b"\0"):
+        key, separator, value = item.partition(b"=")
+        if separator:
+            environment[key.decode("utf-8", "replace")] = value.decode(
+                "utf-8", "replace"
+            )
+    return argv, environment
+
+
+def _argument(argv: list[str], name: str) -> str | None:
+    for index, value in enumerate(argv):
+        if value == name and index + 1 < len(argv):
+            return argv[index + 1] or None
+        if value.startswith(name + "="):
+            return value.split("=", 1)[1] or None
+    return None
+
+
+def _core_version(core_root: PurePosixPath) -> str:
+    source = Path(str(core_root / "msys_core" / "__init__.py")).read_text(
+        encoding="utf-8"
+    )
+    match = CORE_VERSION_PATTERN.search(source)
+    if match is None or not 0 < len(match.group(2)) <= 128:
+        raise AcceptanceError("loaded Core source has no valid __version__")
+    return match.group(2)
+
+
+def running_core_identity(runtime_dir: Path, pids: Iterable[int]) -> dict[str, Any]:
+    """Identify Core from the running daemon, never from the current symlink."""
+
+    identity: dict[str, Any] = {
+        "available": False,
+        "pid": None,
+        "version": None,
+        "root": None,
+        "release": None,
+        "evidence": "proc-cmdline-environ",
+    }
+    process_ids = list(pids)
+    if len(process_ids) != 1:
+        identity["error"] = "exactly one Core process is required"
+        return identity
+    pid = process_ids[0]
+    identity["pid"] = pid
+    try:
+        argv, environment = _process_snapshot(pid)
+        if not any(
+            argv[index] == "-m" and argv[index + 1] == "msys_core.msysd"
+            for index in range(len(argv) - 1)
+        ):
+            raise AcceptanceError("process is not msys_core.msysd")
+        process_runtime = _argument(argv, "--runtime-dir")
+        if (
+            process_runtime is None
+            or PurePosixPath(process_runtime) != PurePosixPath(str(runtime_dir))
+        ):
+            raise AcceptanceError("Core process runtime does not match the probe")
+
+        config = _argument(argv, "--config")
+        if config is None:
+            raise AcceptanceError("Core process has no config path")
+        config_path = PurePosixPath(config)
+        if config_path.name != "config" or config_path.parent.name != "examples":
+            raise AcceptanceError("Core process config does not identify its source root")
+        config_root = config_path.parent.parent
+
+        python_roots = [
+            PurePosixPath(item)
+            for item in environment.get("PYTHONPATH", "").split(":")
+            if item and PurePosixPath(item).is_absolute()
+        ]
+        core_roots = [item for item in python_roots if item.name == "msys-core"]
+        if core_roots != [config_root]:
+            raise AcceptanceError(
+                "Core config root does not match the process PYTHONPATH"
+            )
+
+        version = _core_version(config_root)
+        release: str | None = None
+        try:
+            relative = config_root.relative_to(PurePosixPath("/opt/msys/releases"))
+        except ValueError:
+            pass
+        else:
+            if len(relative.parts) == 2 and relative.parts[1] == "msys-core":
+                release = relative.parts[0]
+        identity.update(
+            {
+                "available": True,
+                "version": version,
+                "root": str(config_root),
+                "release": release,
+            }
+        )
+    except (OSError, UnicodeError, AcceptanceError, ValueError) as exc:
+        identity["error"] = str(exc)[:512]
+    return identity
+
+
 def collect(
     runtime_dir: Path,
     log_file: Path,
@@ -362,6 +473,10 @@ def collect(
     runtime_dir = runtime_dir.resolve(strict=False)
     status = runtime_status(runtime_dir)
     issues = list(status.get("issues", []))
+    pids = status.get("processes", {}).get("pids", [])
+    if not isinstance(pids, list):
+        pids = []
+    core = running_core_identity(runtime_dir, pids)
     components: list[dict[str, Any]] = []
     try:
         payload = _rpc_payload(runtime_dir, "msys.core", "list_components")
@@ -394,7 +509,8 @@ def collect(
         "runtime": {
             "directory": str(runtime_dir),
             "healthy": status.get("healthy") is True,
-            "pids": status.get("processes", {}).get("pids", []),
+            "pids": pids,
+            "core": core,
             "issues": status.get("issues", []),
         },
         "components": categories,

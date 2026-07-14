@@ -5,8 +5,9 @@
 
 .DESCRIPTION
   Ordinary commands use a one-shot WSL process by default. Auto mode reuses a
-  healthy local broker only after it was explicitly started; fast/q and accept
-  select On automatically, while Off always stays one-shot. For the fastest repeated edit
+  healthy local broker only after it was explicitly started; fast/q, accept,
+  ui-accept, and debug select On automatically, while Off always stays
+  one-shot. For the fastest repeated edit
   and debug loop, enter ``shell`` once and run ``msys debug`` (or ``m debug``)
   inside it. First-time key authentication deliberately stays interactive.
 
@@ -47,7 +48,7 @@ MSYS Windows development shortcut
   .\msys.cmd fast --repo msys-settings --deliver --screenshot .\artifacts\settings.png
   .\msys.cmd quick --repo msys-settings --status  # sync/build + current health
   .\msys.cmd quick --repo msys-shell-native       # unchanged source skips upload/build
-  .\msys.cmd debug               # one-shot WSL + one SSH runtime snapshot
+  .\msys.cmd debug               # persistent broker + one SSH runtime snapshot
   .\msys.cmd broker start        # optional opt-in; Auto then reuses this broker
   .\msys.cmd broker status
   .\msys.cmd debug --follow      # snapshot, then keep following the same log stream
@@ -545,7 +546,11 @@ switch ($Command.ToLowerInvariant()) {
     "down" { $cliArgs = @("stop") + $translatedArgs; break }
     { $_ -in @("log", "logs") } { $cliArgs = @("tail") + $translatedArgs; break }
     "ps" { $cliArgs = @("components") + $translatedArgs; break }
-    "inspect" { $cliArgs = @("debug") + $translatedArgs; break }
+    { $_ -in @("debug", "inspect") } {
+        $fastBrokerDefault = $true
+        $cliArgs = @("debug") + $translatedArgs
+        break
+    }
     { $_ -in @("fast", "q") } {
         $fastBrokerDefault = $true
         $fastArgs = @($translatedArgs)
@@ -673,8 +678,9 @@ if ($brokerMode -notin @("auto", "on", "off")) {
 
 # Key setup and initial password authentication require a real interactive
 # stdin. Auto only reuses a healthy explicitly started broker; it never starts
-# one. The fast/q and accept workflows select On when no explicit -Broker value was given;
-# other commands retain Auto. Off always uses one-shot WSL.
+# one. The fast/q, accept, ui-accept, and debug workflows select On when no
+# explicit -Broker value was given; other commands retain Auto. Off always
+# uses one-shot WSL.
 $actionName = $Command.ToLowerInvariant()
 $requiresInteractiveWsl = $interactiveShell -or $actionName -in @(
     "key", "setup-key", "connect", "ssh-warm", "shell", "console", "session"

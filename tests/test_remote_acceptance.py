@@ -139,6 +139,18 @@ class RemoteAcceptanceTests(unittest.TestCase):
                 ),
                 mock.patch.object(remote, "resources", return_value={"disk_available_kib": 1}),
                 mock.patch.object(remote, "current_release", return_value="test-release"),
+                mock.patch.object(
+                    remote,
+                    "running_core_identity",
+                    return_value={
+                        "available": True,
+                        "pid": 42,
+                        "version": "0.1.15",
+                        "root": "/opt/msys/releases/running/msys-core",
+                        "release": "running",
+                        "evidence": "proc-cmdline-environ",
+                    },
+                ),
             ):
                 report = remote.collect(
                     Path("/tmp/msys-main"), log, lines=5, strict_logs=False
@@ -147,9 +159,73 @@ class RemoteAcceptanceTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual(report["release"], "test-release")
         self.assertEqual(report["runtime"]["pids"], [42])
+        self.assertEqual(report["runtime"]["core"]["version"], "0.1.15")
+        self.assertEqual(report["runtime"]["core"]["release"], "running")
         self.assertEqual(report["display"]["source"], "window-manager")
         self.assertEqual(report["recent_warnings_errors"], ["warning: recovered display"])
         self.assertEqual(report["components"]["shell"][0]["version"], "0.3.4")
+
+    def test_running_core_identity_uses_process_paths_not_current_pointer(self) -> None:
+        argv = [
+            "/opt/msys/releases/r6/.runtime/python/bin/python3",
+            "-m",
+            "msys_core.msysd",
+            "--config",
+            "/opt/msys/releases/r6/msys-core/examples/config",
+            "--runtime-dir",
+            "/tmp/msys-main",
+        ]
+        environment = {
+            "PYTHONPATH": (
+                "/opt/msys/releases/r6/msys-core:"
+                "/opt/msys/releases/r6/msys-sdk"
+            )
+        }
+        with (
+            mock.patch.object(
+                remote, "_process_snapshot", return_value=(argv, environment)
+            ),
+            mock.patch.object(remote, "_core_version", return_value="0.1.15") as version,
+            mock.patch.object(remote, "current_release", return_value="r7") as current,
+        ):
+            identity = remote.running_core_identity(Path("/tmp/msys-main"), [321])
+
+        self.assertEqual(
+            identity,
+            {
+                "available": True,
+                "pid": 321,
+                "version": "0.1.15",
+                "root": "/opt/msys/releases/r6/msys-core",
+                "release": "r6",
+                "evidence": "proc-cmdline-environ",
+            },
+        )
+        version.assert_called_once_with(
+            remote.PurePosixPath("/opt/msys/releases/r6/msys-core")
+        )
+        current.assert_not_called()
+
+    def test_running_core_identity_rejects_mismatched_pythonpath(self) -> None:
+        argv = [
+            "python3",
+            "-m",
+            "msys_core.msysd",
+            "--config=/opt/msys/releases/r6/msys-core/examples/config",
+            "--runtime-dir=/tmp/msys-main",
+        ]
+        with mock.patch.object(
+            remote,
+            "_process_snapshot",
+            return_value=(
+                argv,
+                {"PYTHONPATH": "/opt/msys/releases/r5/msys-core"},
+            ),
+        ):
+            identity = remote.running_core_identity(Path("/tmp/msys-main"), [321])
+
+        self.assertFalse(identity["available"])
+        self.assertIn("does not match", identity["error"])
 
     def test_recent_log_events_only_reads_latest_daemon_session(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
