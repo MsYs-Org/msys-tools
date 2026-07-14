@@ -3987,6 +3987,52 @@ def command_visual_smoke(
     return result.returncode
 
 
+def command_ui_acceptance(
+    ctx: Context,
+    runtime_dir: str,
+    *,
+    timeout: float,
+    display_log: str,
+) -> int:
+    if not 0 < timeout <= 120:
+        print(
+            "ui-accept: timeout must be greater than zero and at most 120 seconds",
+            file=sys.stderr,
+        )
+        return 2
+    for label, value in (("runtime directory", runtime_dir), ("display log", display_log)):
+        path = PurePosixPath(value)
+        if (
+            not path.is_absolute()
+            or path == PurePosixPath("/")
+            or ".." in path.parts
+            or len(value) > 1024
+        ):
+            print(f"ui-accept: {label} must be a non-root absolute target path", file=sys.stderr)
+            return 2
+    argv = [
+        ctx.remote_python,
+        "-B",
+        "-m",
+        "msys_tools.remote_ui_acceptance",
+        "--runtime-dir",
+        runtime_dir,
+        "--timeout",
+        f"{timeout:g}",
+        "--display-log",
+        display_log,
+    ]
+    command = (
+        "PYTHONDONTWRITEBYTECODE=1 "
+        f"PYTHONPATH={quote_sh(ctx.remote + '/msys-tools')} "
+        + " ".join(quote_sh(value) for value in argv)
+    )
+    result = ssh_capture(ctx, command)
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    return result.returncode
+
+
 def command_debug_env(ctx: Context, runtime_dir: str) -> int:
     ssh(ctx, (
         "set -x; "
@@ -5637,6 +5683,21 @@ def build_parser() -> argparse.ArgumentParser:
     visual_smoke.add_argument("--timeout", type=_bounded_timeout, default=12.0)
     visual_smoke.add_argument("--runtime-dir")
 
+    ui_accept = sub.add_parser(
+        "ui-accept",
+        aliases=["p0-ui"],
+        parents=[common],
+        help=(
+            "run one reversible single-SSH Notes/Calculator/Device Info P0 UI "
+            "acceptance route"
+        ),
+    )
+    ui_accept.add_argument("--timeout", type=_bounded_timeout, default=12.0)
+    ui_accept.add_argument(
+        "--display-log", default="/tmp/ch347_dirty_usb_x11/live.log"
+    )
+    ui_accept.add_argument("--runtime-dir")
+
     notify = sub.add_parser("notify", parents=[common])
     notify.add_argument("message")
     notify.add_argument("--timeout-ms", type=_bounded_notify_timeout, default=2500)
@@ -6421,6 +6482,13 @@ def main(argv: list[str] | None = None) -> int:
             args.runtime_dir or config.get("runtime_dir", "/run/msys/main"),
             args.component,
             timeout=args.timeout,
+        )
+    if args.command in {"ui-accept", "p0-ui"}:
+        return command_ui_acceptance(
+            ctx,
+            args.runtime_dir or config.get("runtime_dir", "/run/msys/main"),
+            timeout=args.timeout,
+            display_log=args.display_log,
         )
     if args.command == "notify":
         return command_broadcast(

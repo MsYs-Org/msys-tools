@@ -186,6 +186,17 @@ class WindowsShortcutFilesTests(unittest.TestCase):
         self.assertIn('$cliArgs = @("accept") + $translatedArgs', source)
         self.assertIn('$fastBrokerDefault = $true', source)
 
+    def test_ui_accept_shortcut_uses_the_broker_and_one_canonical_command(self) -> None:
+        source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(
+            encoding="utf-8"
+        )
+        branch = source.split(
+            '{ $_ -in @("ui-accept", "p0-ui") } {', maxsplit=1
+        )[1].split("    }", maxsplit=1)[0]
+
+        self.assertIn('$fastBrokerDefault = $true', branch)
+        self.assertIn('$cliArgs = @("ui-accept") + $translatedArgs', branch)
+
     def test_call_shortcut_forwards_quote_free_payload_fields_as_plain_argv(self) -> None:
         source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(
             encoding="utf-8"

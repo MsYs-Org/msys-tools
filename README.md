@@ -615,6 +615,35 @@ The structured `msys.visual-smoke.v1` result includes bounded typed step
 outcomes and the cleanup record. A nonzero status means either the route or
 its restoration failed; inspect that JSON before continuing interactive tests.
 
+For the complete P0 phone UI route, `ui-accept` (alias `p0-ui`) runs one remote
+helper through one SSH connection. It records the initially running manual
+application set, then exercises Notes, Calculator, and Device Info in order:
+
+```powershell
+.\msys.cmd ui-accept
+.\msys.cmd ui-accept --timeout 20 `
+  --display-log /tmp/ch347_dirty_usb_x11/live.log
+```
+
+The `msys.p0-ui-acceptance.v1` JSON verifies the effective workarea, exact
+component/window identities, real bounded P6 window thumbnails, three-card
+Recents data and visible overlay, card activation and close, Back dismissal,
+Back application exit, and a bounded notification toast. After all three test
+apps are ready, the same helper also reports `/proc/*/smaps_rollup` RSS/PSS for
+Core, Native Shell, Native HAL, Notes, Calculator, and Device Info. Missing
+processes, permissions, or kernel files are explicit `unavailable` evidence;
+they do not start another SSH connection. The route uses typed Core,
+window-manager, task-switcher, and broadcast calls rather than synthetic touch
+coordinates. In `finally`, it hides the test Recents overlay, stops only test
+applications that were not originally running, restarts any original manual
+application that the route closed, and restores the original foreground order
+or Home. A restoration mismatch makes the command fail.
+
+When the display sink emits a line such as `dirty_stats frame=...`, the newest
+record is included under `dirty_stats`. This is evidence-only: an older sink
+without that record does not fail UI acceptance. The command does not switch
+releases, install packages, change layout, inject input, or retain screenshots.
+
 The native policy follows live X11 resolution and can switch mobile, kiosk, or
 desktop placement without restarting applications:
 

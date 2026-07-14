@@ -43,6 +43,7 @@ MSYS Windows development shortcut
   .\msys.cmd shell               # fastest loop: cd a repo, then mq/mqs/mqshot
   .\msys.cmd fast --repo msys-settings       # persistent broker + one debug bundle
   .\msys.cmd accept                           # persistent broker + one read-only acceptance
+  .\msys.cmd ui-accept                        # one-SSH reversible P0 UI route
   .\msys.cmd fast --repo msys-settings --deliver --screenshot .\artifacts\settings.png
   .\msys.cmd quick --repo msys-settings --status  # sync/build + current health
   .\msys.cmd quick --repo msys-shell-native       # unchanged source skips upload/build
@@ -561,6 +562,11 @@ switch ($Command.ToLowerInvariant()) {
     "accept" {
         $fastBrokerDefault = $true
         $cliArgs = @("accept") + $translatedArgs
+        break
+    }
+    { $_ -in @("ui-accept", "p0-ui") } {
+        $fastBrokerDefault = $true
+        $cliArgs = @("ui-accept") + $translatedArgs
         break
     }
     "call" {
