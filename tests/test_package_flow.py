@@ -44,6 +44,36 @@ def manifest(version: str = "1.0.0") -> dict:
     }
 
 
+def registry_result(version: str, marker: str) -> dict:
+    return {
+        "schema": dev.INSTALL_AGENT_RESULT_SCHEMA,
+        "operation": "registry",
+        "ok": True,
+        "result": {
+            "schema": "msys.installed.v1",
+            "packages": [
+                {
+                    "package": "org.example.flow",
+                    "version": version,
+                    "path": f"/opt/msys-state/packages/org.example.flow/versions/{version}",
+                    "artifact_sha256": marker * 64,
+                    "content_sha256": marker * 64,
+                }
+            ],
+        },
+    }
+
+
+def rollback_result(version: str) -> dict:
+    return {
+        "schema": dev.INSTALL_AGENT_RESULT_SCHEMA,
+        "operation": "rollback",
+        "ok": True,
+        "package": "org.example.flow",
+        "version": version,
+    }
+
+
 class PackageFlowTests(unittest.TestCase):
     def make_package(self, root: Path) -> Path:
         package = root / "package"
@@ -401,6 +431,95 @@ class PackageFlowTests(unittest.TestCase):
             payload={"package": "org.example.flow"},
             operation="rollback",
         )
+
+    def test_package_roundtrip_observes_previous_and_restores_exact_current(self) -> None:
+        context = dev.Context(
+            root=WORKSPACE,
+            target="root@example",
+            remote="/opt/msys-dev",
+            remote_python="/opt/msys-dev/.runtime/python/bin/python3",
+        )
+        current = registry_result("2.0.0", "a")
+        previous = registry_result("1.0.0", "b")
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                dev,
+                "_typed_agent_result",
+                side_effect=[
+                    (0, current),
+                    (0, rollback_result("1.0.0")),
+                    (0, previous),
+                    (0, rollback_result("2.0.0")),
+                    (0, current),
+                ],
+            ) as request,
+            redirect_stdout(output),
+        ):
+            status = dev.command_package_roundtrip(
+                context, "/tmp/msys-main", "org.example.flow"
+            )
+
+        self.assertEqual(status, 0)
+        report = json.loads(output.getvalue())
+        self.assertTrue(report["ok"])
+        self.assertTrue(report["transitioned"])
+        self.assertTrue(report["restored"])
+        self.assertEqual(report["before"]["version"], "2.0.0")
+        self.assertEqual(report["previous"]["version"], "1.0.0")
+        self.assertEqual(report["final"]["artifact_sha256"], "a" * 64)
+        self.assertEqual(report["recovery_status"], 0)
+        self.assertEqual(
+            [call.kwargs["method"] for call in request.call_args_list],
+            ["registry", "rollback", "registry", "rollback", "registry"],
+        )
+        parsed = dev.build_parser().parse_args(
+            [
+                "package",
+                "roundtrip",
+                "org.example.flow",
+                "--runtime-dir",
+                "/tmp/msys-main",
+            ]
+        )
+        self.assertEqual(parsed.package_command, "roundtrip")
+        self.assertEqual(parsed.package_id, "org.example.flow")
+        self.assertEqual(parsed.runtime_dir, "/tmp/msys-main")
+
+    def test_package_roundtrip_recovers_after_ambiguous_first_failure(self) -> None:
+        context = dev.Context(
+            root=WORKSPACE,
+            target="root@example",
+            remote="/opt/msys-dev",
+            remote_python="/opt/msys-dev/.runtime/python/bin/python3",
+        )
+        current = registry_result("2.0.0", "a")
+        previous = registry_result("1.0.0", "b")
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                dev,
+                "_typed_agent_result",
+                side_effect=[
+                    (0, current),
+                    (255, None),
+                    (0, previous),
+                    (0, rollback_result("2.0.0")),
+                    (0, current),
+                ],
+            ),
+            redirect_stdout(output),
+        ):
+            status = dev.command_package_roundtrip(
+                context, "/tmp/msys-main", "org.example.flow"
+            )
+
+        self.assertEqual(status, 255)
+        report = json.loads(output.getvalue())
+        self.assertFalse(report["ok"])
+        self.assertTrue(report["transitioned"])
+        self.assertTrue(report["restored"])
+        self.assertEqual(report["rollback_status"], 255)
 
     def test_legacy_rollback_requires_explicit_flag(self) -> None:
         context = dev.Context(

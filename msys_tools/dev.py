@@ -2313,7 +2313,7 @@ def _legacy_event_warning(operation: str) -> None:
     )
 
 
-def _typed_agent_request(
+def _typed_agent_result(
     ctx: Context,
     runtime_dir: str,
     *,
@@ -2322,7 +2322,8 @@ def _typed_agent_request(
     payload: dict[str, Any],
     operation: str,
     timeout: float = DEFAULT_RPC_TIMEOUT,
-) -> int:
+    emit_success: bool = True,
+) -> tuple[int, dict[str, Any] | None]:
     completed = remote_control_command(
         ctx,
         runtime_dir,
@@ -2334,14 +2335,14 @@ def _typed_agent_request(
         timeout=timeout,
     )
     if isinstance(completed, int):
-        return completed
+        return completed, None
     try:
         response = _decode_json_document(completed.stdout)
     except ValueError as exc:
         if completed.stdout:
             _print_completed_output(completed, error=True)
         print(f"{operation}: {exc}", file=sys.stderr)
-        return completed.returncode or 1
+        return completed.returncode or 1, None
     if completed.returncode != 0:
         print(json.dumps(response, indent=2, ensure_ascii=False), file=sys.stderr)
         print(
@@ -2349,31 +2350,54 @@ def _typed_agent_request(
             f"{completed.returncode}",
             file=sys.stderr,
         )
-        return completed.returncode
+        return completed.returncode, None
     if response.get("type") != "return":
         print(json.dumps(response, indent=2, ensure_ascii=False), file=sys.stderr)
-        return completed.returncode or 1
+        return completed.returncode or 1, None
     result = response.get("payload")
     if not isinstance(result, dict):
         print(f"{operation}: agent returned a non-object result", file=sys.stderr)
-        return 1
+        return 1, None
     if result.get("schema") != INSTALL_AGENT_RESULT_SCHEMA:
         print(
             f"{operation}: unexpected result schema {result.get('schema')!r}",
             file=sys.stderr,
         )
-        return 1
+        return 1, None
     if result.get("operation") != operation:
         print(
             f"{operation}: agent reported operation {result.get('operation')!r}",
             file=sys.stderr,
         )
-        return 1
-    print_json(result)
+        return 1, None
+    if emit_success:
+        print_json(result)
     if result.get("ok") is not True:
         print(f"{operation}: agent completed with ok=false", file=sys.stderr)
-        return 1
-    return 0
+        return 1, result
+    return 0, result
+
+
+def _typed_agent_request(
+    ctx: Context,
+    runtime_dir: str,
+    *,
+    target: str,
+    method: str,
+    payload: dict[str, Any],
+    operation: str,
+    timeout: float = DEFAULT_RPC_TIMEOUT,
+) -> int:
+    status, _result = _typed_agent_result(
+        ctx,
+        runtime_dir,
+        target=target,
+        method=method,
+        payload=payload,
+        operation=operation,
+        timeout=timeout,
+    )
+    return status
 
 
 def command_install_dir(
@@ -2791,6 +2815,143 @@ def command_rollback(
         method="rollback",
         payload={"package": package},
         operation="rollback",
+    )
+
+
+PACKAGE_SNAPSHOT_FIELDS = (
+    "package",
+    "version",
+    "path",
+    "artifact_sha256",
+    "content_sha256",
+)
+
+
+def _package_registry_snapshot(
+    ctx: Context,
+    runtime_dir: str,
+    package: str,
+) -> tuple[int, dict[str, str] | None]:
+    status, response = _typed_agent_result(
+        ctx,
+        runtime_dir,
+        target="role:install-agent",
+        method="registry",
+        payload={},
+        operation="registry",
+        emit_success=False,
+    )
+    if status != 0 or response is None:
+        return status or 1, None
+    registry = response.get("result")
+    records = registry.get("packages") if isinstance(registry, dict) else None
+    if not isinstance(records, list):
+        print("package roundtrip: install registry has no package list", file=sys.stderr)
+        return 1, None
+    matches = [
+        item
+        for item in records
+        if isinstance(item, dict) and item.get("package") == package
+    ]
+    if len(matches) != 1:
+        print(
+            f"package roundtrip: expected one current record for {package!r}, "
+            f"found {len(matches)}",
+            file=sys.stderr,
+        )
+        return 2, None
+    record = matches[0]
+    snapshot: dict[str, str] = {}
+    for field in PACKAGE_SNAPSHOT_FIELDS:
+        value = record.get(field)
+        if not isinstance(value, str) or not value or len(value) > 4096:
+            print(
+                f"package roundtrip: current record has invalid {field}",
+                file=sys.stderr,
+            )
+            return 1, None
+        if field.endswith("_sha256") and re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            print(
+                f"package roundtrip: current record has invalid {field}",
+                file=sys.stderr,
+            )
+            return 1, None
+        snapshot[field] = value
+    return 0, snapshot
+
+
+def command_package_roundtrip(
+    ctx: Context,
+    runtime_dir: str,
+    package: str,
+) -> int:
+    """Swap to package previous and back, proving exact current restoration."""
+
+    before_status, before = _package_registry_snapshot(ctx, runtime_dir, package)
+    if before_status != 0 or before is None:
+        return before_status or 1
+
+    first_status, _first = _typed_agent_result(
+        ctx,
+        runtime_dir,
+        target="role:install-agent",
+        method="rollback",
+        payload={"package": package},
+        operation="rollback",
+        emit_success=False,
+    )
+    middle_status, middle = _package_registry_snapshot(ctx, runtime_dir, package)
+    transitioned = middle is not None and middle != before
+    must_restore = first_status == 0 or transitioned
+
+    recovery_status: int | None = None
+    if must_restore:
+        recovery_status, _recovery = _typed_agent_result(
+            ctx,
+            runtime_dir,
+            target="role:install-agent",
+            method="rollback",
+            payload={"package": package},
+            operation="rollback",
+            emit_success=False,
+        )
+
+    final_status, final = _package_registry_snapshot(ctx, runtime_dir, package)
+    restored = final is not None and final == before
+
+    ok = (
+        first_status == 0
+        and middle_status == 0
+        and transitioned
+        and recovery_status == 0
+        and final_status == 0
+        and restored
+    )
+    report = {
+        "schema": "msys.package-rollback-roundtrip.v1",
+        "ok": ok,
+        "package": package,
+        "before": before,
+        "previous": middle,
+        "final": final,
+        "rollback_status": first_status,
+        "previous_observation_status": middle_status,
+        "recovery_status": recovery_status,
+        "final_observation_status": final_status,
+        "transitioned": transitioned,
+        "restored": restored,
+    }
+    print_json(report)
+    if not restored:
+        print(
+            "package roundtrip: original current package was not proven restored; "
+            "stop and inspect the install registry before another mutation",
+            file=sys.stderr,
+        )
+    return (
+        0
+        if ok
+        else first_status or middle_status or recovery_status or final_status or 1
     )
 
 
@@ -5482,6 +5643,17 @@ def build_parser() -> argparse.ArgumentParser:
     package_rollback.add_argument("--runtime-dir")
     package_rollback.add_argument("--legacy-events", action="store_true")
 
+    package_roundtrip = package_sub.add_parser(
+        "roundtrip",
+        parents=[common],
+        help=(
+            "accept the real package previous pointer by rolling back and then "
+            "restoring the exact current version and hashes"
+        ),
+    )
+    package_roundtrip.add_argument("package_id")
+    package_roundtrip.add_argument("--runtime-dir")
+
     package_uninstall = package_sub.add_parser(
         "uninstall",
         parents=[common],
@@ -6292,6 +6464,12 @@ def main(argv: list[str] | None = None) -> int:
                     args.runtime_dir or config.get("runtime_dir", "/run/msys/main"),
                     args.package_id,
                     legacy_events=args.legacy_events,
+                )
+            if args.package_command == "roundtrip":
+                return command_package_roundtrip(
+                    ctx,
+                    args.runtime_dir or config.get("runtime_dir", "/run/msys/main"),
+                    args.package_id,
                 )
             return command_uninstall(
                 ctx,

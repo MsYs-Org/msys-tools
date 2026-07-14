@@ -419,6 +419,20 @@ python -m msys_tools.dev package rollback org.example.app
 This is a runtime package rollback, not a source-tree or development `sync`
 rollback.
 
+To acceptance-test the real package-level `previous.json` pointer without
+leaving the older version selected, use one guarded round trip:
+
+```powershell
+.\msys.cmd package roundtrip org.example.app
+```
+
+The command records the exact current version, path, artifact SHA-256, and
+content SHA-256; rolls back to the real previous package; then rolls back again
+and requires every recorded current field to match. Once the first transition
+may have happened, failure paths still attempt the restoring rollback. A failed
+recovery is reported without a blind retry because rollback itself is
+intentionally non-idempotent.
+
 ## Native touch-path debugging
 
 The remote gesture commands call the native `msys-x11-policy` debug interface;
