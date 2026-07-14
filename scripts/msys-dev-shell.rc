@@ -1,0 +1,80 @@
+# Interactive Bash startup file used by ..\msys.ps1 shell.
+# It intentionally contains no host-specific paths: PowerShell provides the
+# workspace path through the environment, so this works from any drive mount.
+if [ -z "${MSYS_DEV_PYTHONPATH:-}" ] || [ -z "${MSYS_DEV_ROOT:-}" ]; then
+    printf '%s\n' 'MSYS development shell was started without its required environment.' >&2
+    return 1
+fi
+
+export PYTHONPATH="$MSYS_DEV_PYTHONPATH"
+export PYTHONDONTWRITEBYTECODE=1
+
+msys() {
+    command python3 -m msys_tools.dev "$@"
+}
+
+_msys_current_repo() {
+    case "$PWD" in
+        "$MSYS_DEV_ROOT"/msys-*)
+            local relative="${PWD#"$MSYS_DEV_ROOT"/}"
+            printf '%s\n' "${relative%%/*}"
+            ;;
+    esac
+}
+
+# Fast edit loop: from inside a repository, mq infers --repo. Explicit
+# --repo remains authoritative, and the root directory keeps normal defaults.
+mq() {
+    local argument repo=""
+    for argument in "$@"; do
+        case "$argument" in
+            --repo|--repo=*) repo="explicit"; break ;;
+        esac
+    done
+    if [ -z "$repo" ]; then
+        repo="$(_msys_current_repo)"
+    fi
+    if [ -n "$repo" ] && [ "$repo" != "explicit" ]; then
+        msys quick --repo "$repo" "$@"
+    else
+        msys quick "$@"
+    fi
+}
+
+mqs() {
+    mq --status "$@"
+}
+
+mqshot() {
+    mq --status --screenshot "$@"
+}
+
+# Formal-runtime-safe loop: source sync, then a compact health/error bundle.
+# It never starts another daemon unless --run is explicit.
+mf() {
+    local argument repo=""
+    for argument in "$@"; do
+        case "$argument" in
+            --repo|--repo=*) repo="explicit"; break ;;
+        esac
+    done
+    if [ -z "$repo" ]; then
+        repo="$(_msys_current_repo)"
+    fi
+    if [ -n "$repo" ] && [ "$repo" != "explicit" ]; then
+        msys fast --repo "$repo" "$@"
+    else
+        msys fast "$@"
+    fi
+}
+
+alias m=msys
+alias md='msys debug'
+alias ml='msys tail'
+alias mc='msys components'
+
+if [ -z "${MSYS_DEV_SHELL_BANNER_SHOWN:-}" ]; then
+    export MSYS_DEV_SHELL_BANNER_SHOWN=1
+    printf '%s\n' 'MSYS fast dev shell: cd msys-settings; mf [--deliver] [--screenshot FILE] | mq; type exit to return to PowerShell.'
+fi
+PS1="[msys-dev] ${PS1:-\\u@\\h:\\w\\$ }"
