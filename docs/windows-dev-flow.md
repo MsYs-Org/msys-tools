@@ -51,8 +51,8 @@ For a running immutable SysV release, use `fast`/`q` as the default edit loop:
 ```
 
 The wrapper automatically starts its loopback-only WSL broker for `fast` and
-reuses it for later calls. The Python command then syncs the selected source
-and collects a bounded health/debug bundle in one SSH execution: current
+reuses it for later calls. Without `--deliver`, the Python command syncs the
+selected source and collects a bounded health/debug bundle in one SSH execution: current
 release, critical component state/version/path when exposed by Core,
 disk/memory, recent warning/error lines, and an optional PNG. `--json` emits
 the same bounded summary as structured data; it never embeds manifests or the
@@ -60,9 +60,12 @@ full isolation document.
 
 Default `fast` does not start or restart `msysd` and clearly reports that a
 source-only sync did not modify the formal live release. `--run` is required
-to start a stopped development runtime. `--deliver` is also explicit, requires
-exactly one installable repository, and reuses the normal MAF/install-agent
-transaction. Core/tools still require the release flow, while install-agent
+to start a stopped development runtime. `--deliver` is also explicit and
+reuses the normal MAF/install-agent transaction. Pure MAF repositories build
+directly from the local workspace without a redundant remote source upload;
+target-native HAL/Shell/X11 repositories still sync and build first. Repeated
+`--repo` values deliver in order, and `--full-sync` explicitly refreshes all
+remote source trees. Core/tools still require the release flow, while install-agent
 self-update requires the documented external/offline installer CLI. From the
 persistent shell, `mf` infers the current `msys-*` repository.
 

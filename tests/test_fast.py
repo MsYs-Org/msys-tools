@@ -259,7 +259,7 @@ class FastWorkflowTests(unittest.TestCase):
                 (sdk / "__init__.py").write_text("", encoding="utf-8")
                 output = io.StringIO()
                 with (
-                    mock.patch.object(dev, "command_sync", return_value=0),
+                    mock.patch.object(dev, "command_sync", return_value=0) as sync,
                     mock.patch.object(
                         dev, "command_package_deliver", return_value=0
                     ) as deliver,
@@ -286,6 +286,7 @@ class FastWorkflowTests(unittest.TestCase):
                     )
 
                 self.assertEqual(result, 0)
+                sync.assert_not_called()
                 overlays = deliver.call_args.kwargs["overlays"]
                 self.assertEqual(len(overlays), 1)
                 self.assertEqual(overlays[0].source, sdk.resolve())
@@ -295,7 +296,7 @@ class FastWorkflowTests(unittest.TestCase):
                 self.assertIn("automatically overlaying", output.getvalue())
                 self.assertIn(repository, output.getvalue())
 
-    def test_batch_delivery_syncs_once_installs_in_order_and_reports_once(self) -> None:
+    def test_batch_package_delivery_skips_source_sync_installs_in_order_and_reports_once(self) -> None:
         repositories = ["msys-settings", "msys-apps", "msys-input-touch"]
         package_ids = [
             "org.msys.settings",
@@ -348,7 +349,7 @@ class FastWorkflowTests(unittest.TestCase):
                 )
 
         self.assertEqual(result, 0)
-        sync.assert_called_once_with(self.context(root), repositories, force=False)
+        sync.assert_not_called()
         self.assertEqual(
             [call.args[2].name for call in deliver.call_args_list], repositories
         )
@@ -361,6 +362,88 @@ class FastWorkflowTests(unittest.TestCase):
                 overlays[0].destination.as_posix(), "files/app/msys_sdk"
             )
         report.assert_called_once()
+
+    def test_target_native_delivery_still_syncs_before_packaging(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "msys-hal"
+            package.mkdir()
+            (package / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "msys.manifest.v1",
+                        "package": {"id": "org.msys.hal.linux"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(dev, "command_sync", return_value=0) as sync,
+                mock.patch.object(dev, "command_package_deliver", return_value=0),
+                mock.patch.object(dev, "command_fast_report", return_value=0),
+            ):
+                result = dev.command_fast(
+                    self.context(root),
+                    ["msys-hal"],
+                    safe=False,
+                    profile="mobile-spi",
+                    runtime_dir="/tmp/msys-main",
+                    state_dir="/opt/msys-state",
+                    log_file="/tmp/msysd.log",
+                    run=False,
+                    deliver=True,
+                    lines=0,
+                    screenshot=None,
+                    display=None,
+                    backend="auto",
+                    timeout=45,
+                    force=False,
+                    full_sync=False,
+                )
+
+        self.assertEqual(result, 0)
+        sync.assert_called_once_with(self.context(root), ["msys-hal"], force=False)
+
+    def test_full_sync_preserves_explicit_source_upload_for_package_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "package-a"
+            package.mkdir()
+            (package / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "msys.manifest.v1",
+                        "package": {"id": "org.example.package-a"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(dev, "command_sync", return_value=0) as sync,
+                mock.patch.object(dev, "command_package_deliver", return_value=0),
+                mock.patch.object(dev, "command_fast_report", return_value=0),
+            ):
+                result = dev.command_fast(
+                    self.context(root),
+                    ["package-a"],
+                    safe=False,
+                    profile="mobile-spi",
+                    runtime_dir="/tmp/msys-main",
+                    state_dir="/opt/msys-state",
+                    log_file="/tmp/msysd.log",
+                    run=False,
+                    deliver=True,
+                    lines=0,
+                    screenshot=None,
+                    display=None,
+                    backend="auto",
+                    timeout=45,
+                    force=False,
+                    full_sync=True,
+                )
+
+        self.assertEqual(result, 0)
+        sync.assert_called_once_with(self.context(root), ["package-a"], force=True)
 
     def test_batch_explicit_overlay_is_rejected_before_sync(self) -> None:
         stderr = io.StringIO()
@@ -439,7 +522,7 @@ class FastWorkflowTests(unittest.TestCase):
                 )
 
         self.assertEqual(result, 9)
-        sync.assert_called_once()
+        sync.assert_not_called()
         self.assertEqual(
             [call.args[2].name for call in deliver.call_args_list],
             repositories[:2],

@@ -70,9 +70,13 @@ and recent warning/error lines in one SSH execution:
 Source sync by itself is not live deployment for the formal SysV release; the
 command says so explicitly. Opt in to the existing MAF build/install
 transaction with `--deliver`. Repeated `--repo` values are fingerprinted and
-synchronized together, then built and transactionally installed in the given
-order. The final health/log/screenshot report runs only once after every
-package succeeds. Delivery is never implicit:
+built and transactionally installed in the given order. Pure MAF packages are
+built directly from the Windows/WSL workspace, so their source is not uploaded
+once before the archive is uploaded again. Repositories with target-native ELF
+artifacts (HAL, Native Shell, and X11 policy) still sync/build first. Use
+`--full-sync` when remote development source must also be refreshed. The final
+health/log/screenshot report runs only once after every package succeeds.
+Delivery is never implicit:
 
 At the workspace root, a bare `\.\msys.cmd q` selects no repository and is a
 diagnostic-only call. This prevents an accidental full-workspace sync or a

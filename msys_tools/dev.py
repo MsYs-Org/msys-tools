@@ -3915,7 +3915,7 @@ def command_fast(
     json_output: bool = False,
     overlays: list[Any] | None = None,
 ) -> int:
-    """Fast edit loop: sync once, optionally deliver/run, then one report."""
+    """Fast edit loop: sync only required sources, then deliver/run and report."""
 
     if deliver and not repos:
         print("fast: --deliver requires at least one --repo", file=sys.stderr)
@@ -3947,11 +3947,27 @@ def command_fast(
         status = command_doctor(ctx, profile)
         if status != 0:
             return status
-    if repos:
-        status = command_sync(ctx, repos, force=full_sync)
+    sync_repositories = list(repos)
+    if deliver and not full_sync:
+        sync_repositories = [
+            repository
+            for repository in repos
+            if repository in TARGET_NATIVE_REPOSITORIES
+        ]
+        skipped = [
+            repository for repository in repos if repository not in sync_repositories
+        ]
+        if skipped:
+            print(
+                "fast: direct package delivery skips redundant remote source sync for "
+                + ", ".join(skipped)
+                + " (use --full-sync to update remote development sources too)"
+            )
+    if sync_repositories:
+        status = command_sync(ctx, sync_repositories, force=full_sync)
         if status != 0:
             return status
-    else:
+    elif not repos:
         print("fast: no repository selected; collecting diagnostics only")
     if repos and not deliver and not run:
         print(
