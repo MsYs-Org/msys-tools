@@ -52,6 +52,7 @@ MSYS Windows development shortcut
   .\msys.cmd debug --follow      # snapshot, then keep following the same log stream
   .\msys.cmd sync --repo msys-shell-native
   .\msys.cmd screenshot .\artifacts\home.png
+  .\msys.cmd call role:hal set_state --field id=bluetooth:hci0 --field changes.powered=true
 
 Short aliases: check=doctor, up=run, down=stop, log=tail, ps=components,
 inspect=debug, connect=ssh-warm, disconnect=ssh-reset, key=setup-key.
@@ -560,6 +561,13 @@ switch ($Command.ToLowerInvariant()) {
     "accept" {
         $fastBrokerDefault = $true
         $cliArgs = @("accept") + $translatedArgs
+        break
+    }
+    "call" {
+        # Keep each --field KEY=VALUE pair as ordinary argv. Unlike an inline
+        # JSON object, this survives PowerShell -> cmd.exe -> PowerShell -> WSL
+        # without relying on nested quote preservation.
+        $cliArgs = @("call") + $translatedArgs
         break
     }
     "broker" {

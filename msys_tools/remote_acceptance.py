@@ -27,6 +27,8 @@ LOG_PATTERN = re.compile(
 )
 MAX_LOG_BYTES = 512 * 1024
 MAX_LOG_LINES = 1000
+DAEMON_SESSION_PATTERN = re.compile(r"^msysd: public control socket(?:\s|$)")
+ISOLATION_AUDIT_PREFIX = "msysd: isolation "
 
 CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
     "settings": ("org.msys.settings:",),
@@ -264,6 +266,18 @@ def inspect_windows(
     }, issues
 
 
+def _is_normal_isolation_audit(line: str) -> bool:
+    if not line.startswith(ISOLATION_AUDIT_PREFIX):
+        return False
+    fields = line.split()
+    if "failure=fail-closed" not in fields or "degraded=False" not in fields:
+        return False
+    remainder = line.replace("failure=fail-closed", "", 1).replace(
+        "degraded=False", "", 1
+    )
+    return LOG_PATTERN.search(remainder) is None
+
+
 def recent_log_events(path: Path, lines: int) -> list[str]:
     if lines <= 0:
         return []
@@ -275,10 +289,21 @@ def recent_log_events(path: Path, lines: int) -> list[str]:
             raw = handle.read(MAX_LOG_BYTES)
     except OSError as exc:
         return [f"<cannot read {path}: {exc}>"]
+    bounded_lines = raw.decode("utf-8", "replace").splitlines()[-MAX_LOG_LINES:]
+    session_start = next(
+        (
+            index
+            for index in range(len(bounded_lines) - 1, -1, -1)
+            if DAEMON_SESSION_PATTERN.match(bounded_lines[index])
+        ),
+        None,
+    )
+    if session_start is not None:
+        bounded_lines = bounded_lines[session_start:]
     matches = [
         line
-        for line in raw.decode("utf-8", "replace").splitlines()[-MAX_LOG_LINES:]
-        if LOG_PATTERN.search(line)
+        for line in bounded_lines
+        if LOG_PATTERN.search(line) and not _is_normal_isolation_audit(line)
     ]
     return matches[-lines:]
 

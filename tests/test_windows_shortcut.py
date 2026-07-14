@@ -186,6 +186,18 @@ class WindowsShortcutFilesTests(unittest.TestCase):
         self.assertIn('$cliArgs = @("accept") + $translatedArgs', source)
         self.assertIn('$fastBrokerDefault = $true', source)
 
+    def test_call_shortcut_forwards_quote_free_payload_fields_as_plain_argv(self) -> None:
+        source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(
+            encoding="utf-8"
+        )
+        call_branch = source.split('    "call" {', maxsplit=1)[1].split(
+            "    }", maxsplit=1
+        )[0]
+
+        self.assertIn('$cliArgs = @("call") + $translatedArgs', call_branch)
+        self.assertIn("--field KEY=VALUE", source)
+        self.assertNotIn("ConvertTo-Json", call_branch)
+
 
 if __name__ == "__main__":
     unittest.main()

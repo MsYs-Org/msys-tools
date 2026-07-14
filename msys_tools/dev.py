@@ -108,6 +108,7 @@ X11_DISPLAY_PATTERN = re.compile(r"^:[0-9]+(?:\.[0-9]+)?$")
 REMOTE_SCREENSHOT_PATTERN = re.compile(
     r"^/tmp/msys-screenshot-[a-f0-9]{32}\.png$"
 )
+CALL_FIELD_SEGMENT_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_SCREENSHOT_BYTES = 64 * 1024 * 1024
 STABLE_WINDOW_ID_PREFIX = "msys.x11-window.v1:"
@@ -124,6 +125,11 @@ SHIELD_STATUS_SCHEMA = "msys.screen-shield.status.v1"
 DOCTOR_PROBE_PREFIX = "__MSYS_DOCTOR_V2__"
 DEFAULT_X11DISPLAY_REMOTE = "/root/x11display"
 DEFAULT_SYSTEM_RELEASE_ROOT = "/opt/msys"
+FAST_DELIVERY_RELEASE_INPUTS = frozenset({"msys-core", "msys-tools"})
+FAST_DELIVERY_SDK_REPOSITORIES = frozenset(
+    {"msys-settings", "msys-apps", "msys-input-touch"}
+)
+FAST_DELIVERY_SDK_OVERLAY = "msys-sdk/msys_sdk=files/app/msys_sdk"
 X11DISPLAY_RUNTIME_BINARIES = (
     "bin/ch347_dirty_usb_sink",
     "bin/ch347_st7796_test",
@@ -2012,6 +2018,70 @@ def command_call(
     )
 
 
+def parse_call_payload(
+    payload_json: str | None,
+    fields: list[str],
+) -> dict[str, Any]:
+    """Decode one call payload without requiring shell-sensitive object JSON."""
+
+    if payload_json is not None:
+        try:
+            payload = json.loads(payload_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"--payload is not valid JSON: {exc.msg}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("--payload must decode to a JSON object")
+        return payload
+
+    payload: dict[str, Any] = {}
+    assigned_paths: set[tuple[str, ...]] = set()
+    for field in fields:
+        name, separator, encoded_value = field.partition("=")
+        if not separator:
+            raise ValueError(f"--field must use KEY=VALUE syntax: {field!r}")
+        path = tuple(name.split("."))
+        if not 1 <= len(path) <= 4:
+            raise ValueError(f"--field path must contain 1 to 4 segments: {name!r}")
+        if any(CALL_FIELD_SEGMENT_PATTERN.fullmatch(segment) is None for segment in path):
+            raise ValueError(f"--field has an invalid key path: {name!r}")
+        if path in assigned_paths:
+            raise ValueError(f"--field leaf is repeated: {name}")
+        conflict = next(
+            (
+                existing
+                for existing in assigned_paths
+                if path[: len(existing)] == existing
+                or existing[: len(path)] == path
+            ),
+            None,
+        )
+        if conflict is not None:
+            raise ValueError(
+                "--field scalar/object path conflict: "
+                f"{'.'.join(conflict)} and {name}"
+            )
+        try:
+            value = json.loads(encoded_value)
+        except json.JSONDecodeError:
+            # Bare text is the common Windows path. It deliberately needs no
+            # nested quotes: --field id=network:wlan0 remains one stable argv.
+            value = encoded_value
+        destination = payload
+        for segment in path[:-1]:
+            child = destination.get(segment)
+            if child is None:
+                child = {}
+                destination[segment] = child
+            if not isinstance(child, dict):
+                raise ValueError(
+                    f"--field scalar/object path conflict at {segment!r}"
+                )
+            destination = child
+        destination[path[-1]] = value
+        assigned_paths.add(path)
+    return payload
+
+
 def command_start_component(ctx: Context, runtime_dir: str, component: str) -> int:
     return remote_control_command(ctx, runtime_dir, "start", {"component": component})
 
@@ -2801,13 +2871,21 @@ def command_wm(
             raise ValueError(
                 f"wm {action} does not accept --window-id or geometry options"
             )
+        if action == "recents":
+            return remote_control_command(
+                ctx,
+                runtime_dir,
+                "navigation_action",
+                {"action": "recents", "input": "debug"},
+                target="role:window-manager",
+            )
         return remote_control_command(
             ctx,
             runtime_dir,
             method,
             {},
             target="role:window-manager",
-            idempotent=method in {"list_windows", "recents"},
+            idempotent=method == "list_windows",
         )
 
     if (
@@ -3632,12 +3710,28 @@ def command_fast(
 ) -> int:
     """Fast edit loop: sync once, optionally deliver/run, then one report."""
 
-    if deliver and len(repos) != 1:
-        print("fast: --deliver requires exactly one --repo", file=sys.stderr)
+    if deliver and not repos:
+        print("fast: --deliver requires at least one --repo", file=sys.stderr)
         return 2
-    if deliver and repos[0] in {"msys-core", "msys-tools"}:
+    if deliver and overlays and len(repos) != 1:
         print(
-            f"fast: {repos[0]} is a formal release input; use the release compose/stage/"
+            "fast: explicit --overlay is allowed only with exactly one --repo; "
+            "a batch overlay has no unambiguous repository owner",
+            file=sys.stderr,
+        )
+        return 2
+    blocked_release_inputs = [
+        repository for repository in repos if repository in FAST_DELIVERY_RELEASE_INPUTS
+    ]
+    if deliver and blocked_release_inputs:
+        blocked = ", ".join(blocked_release_inputs)
+        classification = (
+            "is a formal release input"
+            if len(blocked_release_inputs) == 1
+            else "are formal release inputs"
+        )
+        print(
+            f"fast: {blocked} {classification}; use the release compose/stage/"
             "activate flow instead of pretending a source sync is live deployment",
             file=sys.stderr,
         )
@@ -3659,55 +3753,58 @@ def command_fast(
         )
 
     if deliver:
-        package_dir = (ctx.root / repos[0]).resolve()
-        try:
-            selected_overlays = list(overlays or [])
-            if not selected_overlays and repos[0] in {"msys-settings", "msys-apps"}:
-                selected_overlays.append(
-                    parse_overlay_spec(
-                        ctx.root,
-                        "msys-sdk/msys_sdk=files/app/msys_sdk",
+        explicit_overlays = list(overlays or [])
+        for position, repository in enumerate(repos, start=1):
+            package_dir = (ctx.root / repository).resolve()
+            try:
+                selected_overlays = list(explicit_overlays)
+                if (
+                    not selected_overlays
+                    and repository in FAST_DELIVERY_SDK_REPOSITORIES
+                ):
+                    selected_overlays.append(
+                        parse_overlay_spec(ctx.root, FAST_DELIVERY_SDK_OVERLAY)
                     )
+                    print(
+                        "fast: automatically overlaying msys-sdk/msys_sdk -> "
+                        f"files/app/msys_sdk for canonical {repository} delivery"
+                    )
+                manifest = resolve_source_manifest(package_dir)
+                document = json.loads(manifest.read_text(encoding="utf-8-sig"))
+                package_document = (
+                    document.get("package") if isinstance(document, dict) else None
                 )
-                print(
-                    "fast: automatically overlaying msys-sdk/msys_sdk -> "
-                    f"files/app/msys_sdk for canonical {repos[0]} delivery"
+                package_id = (
+                    package_document.get("id")
+                    if isinstance(package_document, dict)
+                    else None
                 )
-            manifest = resolve_source_manifest(package_dir)
-            document = json.loads(manifest.read_text(encoding="utf-8-sig"))
-            package_document = (
-                document.get("package") if isinstance(document, dict) else None
-            )
-            package_id = (
-                package_document.get("id")
-                if isinstance(package_document, dict)
-                else None
-            )
-            status = command_package_deliver(
-                ctx,
-                ctx.root,
-                package_dir,
-                ctx.root / "dist",
-                runtime_dir=runtime_dir,
-                state_dir=state_dir,
-                force=True,
-                source_date_epoch=None,
-                manifest_path=manifest,
-                artifact_format="maf",
-                overlays=selected_overlays,
-                legacy_events=False,
-            )
-        except (OSError, UnicodeError, json.JSONDecodeError, PackageFlowError) as exc:
-            print(f"fast: cannot deliver {repos[0]}: {exc}", file=sys.stderr)
-            return 2
-        if status != 0:
-            if package_id == "org.msys.core.install":
-                print(
-                    "fast: install-agent self-update requires the external/offline "
-                    "msys_install.cli install-archive transaction",
-                    file=sys.stderr,
+                print(f"fast: delivering {position}/{len(repos)} {repository}")
+                status = command_package_deliver(
+                    ctx,
+                    ctx.root,
+                    package_dir,
+                    ctx.root / "dist",
+                    runtime_dir=runtime_dir,
+                    state_dir=state_dir,
+                    force=True,
+                    source_date_epoch=None,
+                    manifest_path=manifest,
+                    artifact_format="maf",
+                    overlays=selected_overlays,
+                    legacy_events=False,
                 )
-            return status
+            except (OSError, UnicodeError, json.JSONDecodeError, PackageFlowError) as exc:
+                print(f"fast: cannot deliver {repository}: {exc}", file=sys.stderr)
+                return 2
+            if status != 0:
+                if package_id == "org.msys.core.install":
+                    print(
+                        "fast: install-agent self-update requires the external/offline "
+                        "msys_install.cli install-archive transaction",
+                        file=sys.stderr,
+                    )
+                return status
     elif run:
         status = command_run(
             ctx, profile, runtime_dir, log_file, ctx.remote_python, timeout
@@ -4913,7 +5010,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SOURCE=DEST",
         help=(
             "add a package overlay for --deliver; repeat for multiple overlays "
-            "(canonical Settings/Apps default to their required SDK overlay)"
+            "(explicit overlays require exactly one repo; canonical Settings/Apps/"
+            "Input default to their required SDK overlay)"
         ),
     )
     fast_action = fast.add_mutually_exclusive_group()
@@ -4925,7 +5023,7 @@ def build_parser() -> argparse.ArgumentParser:
     fast_action.add_argument(
         "--deliver",
         action="store_true",
-        help="build and install the one selected package through install-agent",
+        help="build and transactionally install selected packages in repository order",
     )
     fast.add_argument(
         "--logs",
@@ -5068,7 +5166,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     call.add_argument("call_target")
     call.add_argument("method")
-    call.add_argument("--payload", default="{}")
+    call_payload = call.add_mutually_exclusive_group()
+    call_payload.add_argument(
+        "--payload",
+        help="complete JSON object (legacy; shell quoting rules apply)",
+    )
+    call_payload.add_argument(
+        "--field",
+        action="append",
+        default=[],
+        dest="call_fields",
+        metavar="KEY=VALUE",
+        help=(
+            "add one payload field without object JSON; repeat as needed "
+            "(dotted keys nest up to 4 levels; JSON literals are typed)"
+        ),
+    )
     call.add_argument("--timeout", type=float, default=30.0)
     call.add_argument("--idempotent", action="store_true")
     call.add_argument("--runtime-dir")
@@ -5860,12 +5973,16 @@ def main(argv: list[str] | None = None) -> int:
             args.name,
         )
     if args.command == "call":
+        try:
+            call_payload = parse_call_payload(args.payload, args.call_fields)
+        except ValueError as exc:
+            parser.error(f"call: {exc}")
         return command_call(
             ctx,
             args.runtime_dir or config.get("runtime_dir", "/run/msys/main"),
             args.call_target,
             args.method,
-            json.loads(args.payload),
+            call_payload,
             args.timeout,
             args.idempotent,
         )

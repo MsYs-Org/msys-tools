@@ -151,10 +151,122 @@ class RemoteAcceptanceTests(unittest.TestCase):
         self.assertEqual(report["recent_warnings_errors"], ["warning: recovered display"])
         self.assertEqual(report["components"]["shell"][0]["version"], "0.3.4")
 
+    def test_recent_log_events_only_reads_latest_daemon_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "msysd.log"
+            log.write_text(
+                "msysd: public control socket /tmp/old/control.sock\n"
+                "Traceback: historical failure\n"
+                "msysd: public control socket /tmp/current/control.sock\n"
+                "warning: current recovery\n",
+                encoding="utf-8",
+            )
+            events = remote.recent_log_events(log, lines=10)
+
+        self.assertEqual(events, ["warning: current recovery"])
+
+    def test_recent_log_events_without_session_boundary_keeps_legacy_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "msysd.log"
+            log.write_text(
+                "ERROR: first\nnormal\nwarning: second\n",
+                encoding="utf-8",
+            )
+            events = remote.recent_log_events(log, lines=10)
+
+        self.assertEqual(events, ["ERROR: first", "warning: second"])
+
+    def test_recent_log_events_ignores_normal_isolation_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "msysd.log"
+            log.write_text(
+                "msysd: public control socket /tmp/msys-main/control.sock\n"
+                "msysd: isolation component=org.example:app "
+                "failure=fail-closed degraded=False backend=landlock\n",
+                encoding="utf-8",
+            )
+            events = remote.recent_log_events(log, lines=10)
+
+        self.assertEqual(events, [])
+
+    def test_recent_log_events_keeps_abnormal_isolation_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "msysd.log"
+            log.write_text(
+                "msysd: public control socket /tmp/msys-main/control.sock\n"
+                "msysd: isolation component=a failure=fail-closed "
+                "degraded=True backend=none\n"
+                "msysd: isolation component=b failure=fail-closed "
+                "degraded=False error=setup-failed\n",
+                encoding="utf-8",
+            )
+            events = remote.recent_log_events(log, lines=10)
+
+        self.assertEqual(
+            events,
+            [
+                "msysd: isolation component=a failure=fail-closed "
+                "degraded=True backend=none",
+                "msysd: isolation component=b failure=fail-closed "
+                "degraded=False error=setup-failed",
+            ],
+        )
+
     def test_strict_logs_turns_matched_lines_into_a_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             log = Path(temporary) / "msysd.log"
             log.write_text("ERROR: test\n", encoding="utf-8")
+            with (
+                mock.patch.object(
+                    remote,
+                    "runtime_status",
+                    return_value={
+                        "healthy": True,
+                        "issues": [],
+                        "processes": {"pids": [1]},
+                    },
+                ),
+                mock.patch.object(
+                    remote,
+                    "_rpc_payload",
+                    return_value={"components": self.components()},
+                ),
+                mock.patch.object(
+                    remote,
+                    "_load_display_session",
+                    return_value=(
+                        {
+                            "display": ":24",
+                            "provider": "org.msys.openstick.ch347:x11-spi-touch-output",
+                            "geometry": {"width": 320, "height": 480},
+                        },
+                        "window-manager",
+                    ),
+                ),
+                mock.patch.object(
+                    remote,
+                    "inspect_windows",
+                    return_value=(
+                        {"available": True, "count": 1, "key_window_count": 1},
+                        [],
+                    ),
+                ),
+            ):
+                report = remote.collect(
+                    Path("/tmp/msys-main"), log, lines=10, strict_logs=True
+                )
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["issues"][-1]["code"], "RECENT_ERROR_LOGS")
+
+    def test_strict_logs_ignores_errors_from_previous_daemon_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "msysd.log"
+            log.write_text(
+                "ERROR: previous daemon\n"
+                "msysd: public control socket /tmp/msys-main/control.sock\n"
+                "msysd: ready\n",
+                encoding="utf-8",
+            )
             with (
                 mock.patch.object(
                     remote,
@@ -183,8 +295,9 @@ class RemoteAcceptanceTests(unittest.TestCase):
                 report = remote.collect(
                     Path("/tmp/msys-main"), log, lines=10, strict_logs=True
                 )
-        self.assertFalse(report["ok"])
-        self.assertEqual(report["issues"][-1]["code"], "RECENT_ERROR_LOGS")
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["recent_warnings_errors"], [])
 
 
 if __name__ == "__main__":

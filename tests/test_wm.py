@@ -61,7 +61,6 @@ class WindowManagerCommandTests(unittest.TestCase):
         for action, method, idempotent in [
             ("list", "list_windows", True),
             ("list_windows", "list_windows", True),
-            ("recents", "recents", True),
             ("home", "home", False),
             ("back", "back", False),
             ("close_active", "close_active", False),
@@ -77,6 +76,19 @@ class WindowManagerCommandTests(unittest.TestCase):
             self.assertEqual(
                 remote.call_args.kwargs["idempotent"], idempotent
             )
+
+    def test_recents_opens_task_switcher_through_navigation_action(self) -> None:
+        with mock.patch.object(
+            dev, "remote_control_command", return_value=0
+        ) as remote:
+            status = dev.command_wm(self.context(), "/tmp/msys-main", "recents")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            remote.call_args.args[2:4],
+            ("navigation_action", {"action": "recents", "input": "debug"}),
+        )
+        self.assertEqual(remote.call_args.kwargs, {"target": "role:window-manager"})
 
     def test_invalid_id_and_geometry_are_rejected_before_transport(self) -> None:
         cases = [

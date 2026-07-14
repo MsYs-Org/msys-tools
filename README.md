@@ -68,8 +68,11 @@ and recent warning/error lines in one SSH execution:
 ```
 
 Source sync by itself is not live deployment for the formal SysV release; the
-command says so explicitly. For one installable repository only, opt in to the
-existing MAF build/install transaction with `--deliver`. It is never implicit:
+command says so explicitly. Opt in to the existing MAF build/install
+transaction with `--deliver`. Repeated `--repo` values are fingerprinted and
+synchronized together, then built and transactionally installed in the given
+order. The final health/log/screenshot report runs only once after every
+package succeeds. Delivery is never implicit:
 
 At the workspace root, a bare `\.\msys.cmd q` selects no repository and is a
 diagnostic-only call. This prevents an accidental full-workspace sync or a
@@ -77,20 +80,25 @@ native Core rebuild; enter a repository or pass `--repo` to synchronize code.
 
 ```powershell
 .\msys.cmd fast --repo msys-settings --deliver --screenshot .\artifacts\settings.png --force
+.\msys.cmd fast --repo msys-settings --repo msys-apps `
+  --repo msys-input-touch --deliver
 ```
 
 `fast --deliver` also accepts repeatable
-`--overlay SOURCE=RELATIVE_DEST`. Canonical `msys-settings` and `msys-apps`
-deliveries require the sibling SDK at runtime, so when no explicit overlay is
-given, `fast` prints a notice and automatically applies:
+`--overlay SOURCE=RELATIVE_DEST`. Canonical `msys-settings`, `msys-apps`, and
+`msys-input-touch` deliveries each require the sibling SDK at runtime, so when
+no explicit overlay is given, `fast` prints a notice and automatically applies
+this overlay to each applicable package independently:
 
 ```text
 msys-sdk/msys_sdk=files/app/msys_sdk
 ```
 
-Any explicit `--overlay` list is authoritative and disables that default.
-This prevents the canonical apps from passing archive validation and then
-failing with `ModuleNotFoundError` on the target.
+Any explicit `--overlay` list is authoritative and disables that default. To
+keep ownership unambiguous, explicit overlays are accepted only when exactly
+one repository is selected; batch delivery with an explicit overlay fails
+before synchronization. This prevents canonical apps from passing archive
+validation and then failing with `ModuleNotFoundError` on the target.
 
 For a release/runtime acceptance pass without syncing or changing target
 state, use `accept`. The Windows shortcut starts/reuses the same loopback WSL
@@ -109,11 +117,15 @@ lines, disk/memory/swap, and optional screenshot:
 The default is read-only: it never syncs, starts/stops a component, installs a
 package, or injects input. `--expect-window` is repeatable and accepts exact
 `component=`, `identity=`, `role=`, or `title=` checks. Recent matched log lines
-are evidence only unless `--strict-logs` is selected. Screenshot bytes travel
-inside the same bounded SSH archive, without SCP or a second cleanup call.
+come only from the latest daemon session when its control-socket marker is
+available, and are evidence only unless `--strict-logs` is selected. Screenshot
+bytes travel inside the same bounded SSH archive, without SCP or a second
+cleanup call.
 
-`--deliver` refuses multiple repositories. Core and tools remain release
-inputs and must use compose/stage/activate. Install-agent self-update preserves
+Core and tools remain release inputs and are rejected before synchronization,
+even when included in a delivery batch; they must use compose/stage/activate.
+Batch delivery stops immediately on the first build or install failure and
+does not print a final successful report. Install-agent self-update preserves
 the agent's failure and points to the external/offline
 `msys_install.cli install-archive` path. `--run` is also explicit and is only
 for starting a stopped development runtime; `fast` never starts a second
@@ -448,6 +460,25 @@ wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev call in
 wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev call component:org.msys.sdk.native:echo ping --idempotent
 ```
 
+From PowerShell, use repeatable `--field KEY=VALUE` instead of embedding a JSON
+object in `--payload`. It survives the `.cmd`/PowerShell/WSL boundary without
+special escaping. Valid JSON literals retain their type; other values are sent
+as strings:
+
+```powershell
+.\msys.cmd call role:hal get --field id=network:wlan0
+.\msys.cmd call role:hal set_state --field id=bluetooth:hci0 `
+  --field changes.powered=true --field changes.priority=10
+```
+
+The second example sends `{"id":"bluetooth:hci0","changes":{"powered":true,
+"priority":10}}`: `id` is a string, `powered` a Boolean, and `priority` a
+number. Dotted paths support at most four safe identifier segments. Duplicate
+leaves, parent/child scalar-object conflicts, and malformed `KEY=VALUE` fields
+fail locally before SSH. The existing `--payload '{"key":"value"}'` option
+remains available for shells where JSON quoting is already controlled; it
+cannot be combined with `--field`.
+
 The Apps key opens the replaceable `task-switcher` role. Back dismisses that
 panel first; a second Back closes the foreground MSYS component through its
 normal lifecycle rather than reporting it as a crash.
@@ -525,7 +556,9 @@ and all ranges are checked locally before SSH. The generation-bearing handle
 is still revalidated by X11 policy before every focus/minimize/move/resize or
 close operation, so an old XID cannot control a newly created window. Existing
 `wm home`, `wm back`, `wm recents`, `wm list_windows`, and `wm close_active`
-spellings remain available.
+spellings remain available. `wm recents` uses the navigation-action route and
+opens the visible task switcher; `wm list`/`wm list_windows` remain read-only
+window snapshot queries.
 
 For visual debugging without synthetic input, `screenshot` captures one PNG
 from the active `display-session.json` (the OpenStick session is normally
