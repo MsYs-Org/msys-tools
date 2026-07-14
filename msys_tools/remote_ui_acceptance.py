@@ -23,6 +23,7 @@ DEFAULT_COMPONENTS = (
 OVERLAY_ROLES = frozenset(
     {
         "control-center",
+        "input-method",
         "intent-chooser",
         "notification-center",
         "notification-presenter",
@@ -560,25 +561,80 @@ def run_p0_ui_acceptance(
 
         back_component = components[2]
         rpc("msys.core", "start", {"component": back_component}, "back.focus")
-        wait(
+        back_focus_windows = wait(
             "back.focus",
             lambda: windows("back.focus"),
             lambda items: bool(
                 (item := _window(items, back_component)) and item.get("state") == "visible"
             ),
         )
-        rpc(
+        input_method_before = next(
+            (
+                {
+                    key: item.get(key)
+                    for key in ("id", "identity", "role", "kind", "state")
+                    if item.get(key) is not None
+                }
+                for item in back_focus_windows
+                if item.get("role") == "input-method"
+                and item.get("state") == "visible"
+            ),
+            None,
+        )
+
+        def back_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+            return {
+                key: payload.get(key)
+                for key in (
+                    "ok",
+                    "dismissed",
+                    "closed_component",
+                    "destination",
+                    "reason",
+                    "window_id",
+                )
+                if payload.get(key) is not None
+            }
+
+        first_back = rpc(
             "role:window-manager",
             "navigation_action",
             {"action": "back", "input": "debug"},
             "back.close",
         )
+        back_actions = [back_evidence(first_back)]
+        if first_back.get("dismissed") is not None:
+            if first_back.get("dismissed") != "input-method":
+                raise P0UIAcceptanceError(
+                    "back.close dismissed an unexpected overlay: "
+                    f"{first_back.get('dismissed')}"
+                )
+            wait(
+                "back.input-method-hidden",
+                lambda: windows("back.input-method-hidden"),
+                lambda items: not any(
+                    item.get("role") == "input-method"
+                    and item.get("state") == "visible"
+                    for item in items
+                ),
+            )
+            second_back = rpc(
+                "role:window-manager",
+                "navigation_action",
+                {"action": "back", "input": "debug"},
+                "back.close-application",
+            )
+            back_actions.append(back_evidence(second_back))
         wait(
             "back.close",
             lambda: inventory("back.close"),
             lambda items: stopped(items, back_component),
         )
-        checks["back_application"] = {"component": back_component}
+        checks["back_application"] = {
+            "component": back_component,
+            "input_method_before": input_method_before,
+            "actions": back_actions,
+        }
 
         toast_pending = True
         rpc(

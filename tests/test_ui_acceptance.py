@@ -26,7 +26,12 @@ def returned(payload: dict) -> dict:
 
 
 class FakeP0Runtime:
-    def __init__(self, *, initially_running: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        initially_running: set[str] | None = None,
+        input_method_component: str | None = None,
+    ) -> None:
         self.identities = {
             "org.msys.apps:notes": "org.msys.apps.notes",
             "org.msys.apps:calculator": "org.msys.apps.calculator",
@@ -41,6 +46,8 @@ class FakeP0Runtime:
         ]
         self.task_visible = False
         self.toast_visible = False
+        self.input_method_component = input_method_component
+        self.input_method_visible = False
         self.calls: list[tuple[str, str, dict]] = []
 
     def descriptors(self) -> list[dict]:
@@ -67,10 +74,13 @@ class FakeP0Runtime:
             *(item for item in self.foreground if item != component),
         ]
         self.task_visible = False
+        self.input_method_visible = component == self.input_method_component
 
     def stop(self, component: str) -> None:
         self.running.discard(component)
         self.foreground = [item for item in self.foreground if item != component]
+        if component == self.input_method_component:
+            self.input_method_visible = False
 
     def windows(self) -> list[dict]:
         result = []
@@ -109,6 +119,17 @@ class FakeP0Runtime:
                     "id": "msys.x11-window.v1:toast",
                     "identity": "org.msys.shell.native.notifications",
                     "role": "notification-presenter",
+                    "kind": "overlay",
+                    "state": "visible",
+                },
+            )
+        if self.input_method_visible:
+            result.insert(
+                0,
+                {
+                    "id": "msys.x11-window.v1:input-method",
+                    "identity": "org.msys.input.touch.keyboard",
+                    "role": "input-method",
                     "kind": "overlay",
                     "state": "visible",
                 },
@@ -184,6 +205,15 @@ class FakeP0Runtime:
             if self.task_visible:
                 self.task_visible = False
                 return returned({"ok": True, "dismissed": "task-switcher"})
+            if self.input_method_visible:
+                self.input_method_visible = False
+                return returned(
+                    {
+                        "ok": True,
+                        "dismissed": "input-method",
+                        "window_id": "msys.x11-window.v1:input-method",
+                    }
+                )
             if self.foreground:
                 closed = self.foreground[0]
                 self.stop(closed)
@@ -281,6 +311,43 @@ class P0UIAcceptanceTests(unittest.TestCase):
         )
         self.assertFalse(document["dirty_stats"]["available"])
         self.assertTrue(document["dirty_stats"]["evidence_only"])
+
+    def test_back_hides_input_method_then_closes_application(self) -> None:
+        runtime = FakeP0Runtime(input_method_component=DEFAULT_COMPONENTS[2])
+
+        status, document = run_p0_ui_acceptance(
+            "/tmp/msys-main",
+            rpc_call=runtime,
+            sleep=runtime.sleep,
+            thumbnail_probe=fake_thumbnail,
+            memory_probe=fake_memory,
+            display_log="/missing/old-sink.log",
+        )
+
+        self.assertEqual(status, 0)
+        self.assertTrue(document["ok"])
+        evidence = document["checks"]["back_application"]
+        self.assertEqual(evidence["input_method_before"]["role"], "input-method")
+        self.assertEqual(
+            evidence["actions"],
+            [
+                {
+                    "ok": True,
+                    "dismissed": "input-method",
+                    "window_id": "msys.x11-window.v1:input-method",
+                },
+                {
+                    "ok": True,
+                    "closed_component": DEFAULT_COMPONENTS[2],
+                },
+            ],
+        )
+        back_calls = [
+            payload
+            for target, method, payload in runtime.calls
+            if target == "role:window-manager" and method == "navigation_action"
+        ]
+        self.assertEqual(len(back_calls), 3)
 
     def test_failure_still_restores_apps_that_were_running_before_test(self) -> None:
         original = {"org.msys.settings:main", "org.msys.apps:device-info"}
