@@ -16,6 +16,11 @@ from .remote_lifecycle import runtime_processes
 
 SCHEMA = "msys.p0-ui-acceptance.v1"
 DEFAULT_COMPONENTS = (
+    "org.msys.notes:notes",
+    "org.msys.calculator:calculator",
+    "org.msys.device-info:device-info",
+)
+LEGACY_COMPONENTS = (
     "org.msys.apps:notes",
     "org.msys.apps:calculator",
     "org.msys.apps:device-info",
@@ -387,6 +392,11 @@ def run_p0_ui_acceptance(
     original_running: set[str] = set()
     original_foreground: list[str] = []
     original_foreground_manual: set[str] = set()
+    component_contract = {
+        "mode": "split-packages" if components == DEFAULT_COMPONENTS else "explicit",
+        "requested": list(components),
+        "selected": list(components),
+    }
     started: set[str] = set()
     mutated = toast_pending = False
     restored = True
@@ -451,6 +461,26 @@ def run_p0_ui_acceptance(
             raise P0UIAcceptanceError("at least three unique P0 components are required")
         before = inventory("preflight.components")
         descriptors = {str(item.get("id")): item for item in before}
+        if components == DEFAULT_COMPONENTS:
+            split_present = [item for item in DEFAULT_COMPONENTS if item in descriptors]
+            legacy_present = [item for item in LEGACY_COMPONENTS if item in descriptors]
+            if not split_present and len(legacy_present) == len(LEGACY_COMPONENTS):
+                components = LEGACY_COMPONENTS
+                component_contract.update(
+                    mode="legacy-bundle-compatibility", selected=list(components)
+                )
+            elif len(split_present) != len(DEFAULT_COMPONENTS):
+                missing = [item for item in DEFAULT_COMPONENTS if item not in descriptors]
+                component_contract.update(
+                    mode="incomplete-split-migration",
+                    present=split_present,
+                    missing=missing,
+                    legacy_present=legacy_present,
+                )
+                raise P0UIAcceptanceError(
+                    "split application migration is incomplete; missing="
+                    f"{missing}; install all split packages or restore all legacy components"
+                )
         for component in components:
             item = descriptors.get(component)
             if not item or item.get("lifecycle") != "manual" or item.get("launchable") is not True:
@@ -793,6 +823,7 @@ def run_p0_ui_acceptance(
         "schema": SCHEMA,
         "ok": error is None and restored,
         "components": list(components),
+        "component_contract": component_contract,
         "baseline": {
             "manual_running": sorted(original_running),
             "foreground": original_foreground,

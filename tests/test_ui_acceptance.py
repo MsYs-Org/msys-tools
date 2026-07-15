@@ -10,6 +10,7 @@ from unittest import mock
 from msys_tools import dev
 from msys_tools.remote_ui_acceptance import (
     DEFAULT_COMPONENTS,
+    LEGACY_COMPONENTS,
     P0UIAcceptanceError,
     check_task_switcher_stacking,
     collect_process_memory,
@@ -35,9 +36,9 @@ class FakeP0Runtime:
         input_method_component: str | None = None,
     ) -> None:
         self.identities = {
-            "org.msys.apps:notes": "org.msys.apps.notes",
-            "org.msys.apps:calculator": "org.msys.apps.calculator",
-            "org.msys.apps:device-info": "org.msys.apps.device-info",
+            "org.msys.notes:notes": "org.msys.apps.notes",
+            "org.msys.calculator:calculator": "org.msys.apps.calculator",
+            "org.msys.device-info:device-info": "org.msys.apps.device-info",
             "org.msys.settings:main": "org.msys.settings",
         }
         self.running = set(
@@ -342,6 +343,57 @@ class P0UIAcceptanceTests(unittest.TestCase):
             document["checks"]["recents"]["x11_stacking"]["order"],
             "top-to-bottom",
         )
+        self.assertEqual(document["component_contract"]["mode"], "split-packages")
+
+    def test_default_route_can_probe_a_pre_split_board_without_changing_defaults(self) -> None:
+        runtime = FakeP0Runtime()
+        identities = tuple(runtime.identities[item] for item in DEFAULT_COMPONENTS)
+        runtime.identities = dict(zip(LEGACY_COMPONENTS, identities))
+        runtime.identities["org.msys.settings:main"] = "org.msys.settings"
+
+        status, document = run_p0_ui_acceptance(
+            "/tmp/msys-main",
+            rpc_call=runtime,
+            sleep=runtime.sleep,
+            thumbnail_probe=fake_thumbnail,
+            memory_probe=fake_memory,
+            display_log="/missing/old-sink.log",
+        )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(document["components"], list(LEGACY_COMPONENTS))
+        self.assertEqual(
+            document["component_contract"],
+            {
+                "mode": "legacy-bundle-compatibility",
+                "requested": list(DEFAULT_COMPONENTS),
+                "selected": list(LEGACY_COMPONENTS),
+            },
+        )
+
+    def test_partial_split_migration_fails_before_mutation_with_actionable_ids(self) -> None:
+        runtime = FakeP0Runtime()
+        runtime.identities.pop("org.msys.calculator:calculator")
+
+        status, document = run_p0_ui_acceptance(
+            "/tmp/msys-main",
+            rpc_call=runtime,
+            sleep=runtime.sleep,
+            thumbnail_probe=fake_thumbnail,
+            memory_probe=fake_memory,
+            display_log="/missing/old-sink.log",
+        )
+
+        self.assertEqual(status, 1)
+        self.assertTrue(document["restored"])
+        self.assertIn("migration is incomplete", document["error"])
+        self.assertEqual(
+            document["component_contract"]["missing"],
+            ["org.msys.calculator:calculator"],
+        )
+        self.assertFalse(
+            any(method in {"start", "stop"} for _target, method, _payload in runtime.calls)
+        )
 
     def test_foreground_manual_missing_from_running_snapshot_is_not_a_false_failure(self) -> None:
         runtime = FakeP0Runtime(
@@ -437,7 +489,7 @@ class P0UIAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(back_calls), 3)
 
     def test_failure_still_restores_apps_that_were_running_before_test(self) -> None:
-        original = {"org.msys.settings:main", "org.msys.apps:device-info"}
+        original = {"org.msys.settings:main", "org.msys.device-info:device-info"}
         runtime = FakeP0Runtime(initially_running=original)
 
         def fail_calculator(path: str, runtime_dir: str) -> dict:
@@ -499,7 +551,7 @@ class P0UIAcceptanceTests(unittest.TestCase):
             },
             {
                 "native_id": "0x30",
-                "component": "org.msys.apps:calculator",
+                "component": "org.msys.calculator:calculator",
                 "role": "application",
                 "kind": "application",
                 "state": "visible",
@@ -593,7 +645,7 @@ class P0UIAcceptanceTests(unittest.TestCase):
             for pid, component, rss, pss in (
                 (100, "", 10000, 7000),
                 (101, "org.msys.shell.native:desktop-shell", 6000, 3000),
-                (102, "org.msys.apps:notes", 8000, 5000),
+                (102, "org.msys.notes:notes", 8000, 5000),
             ):
                 directory = proc / str(pid)
                 directory.mkdir()
@@ -618,7 +670,7 @@ class P0UIAcceptanceTests(unittest.TestCase):
             by_component["org.msys.shell.native:desktop-shell"]["rss_kib"],
             6000,
         )
-        self.assertEqual(by_component["org.msys.apps:notes"]["pss_kib"], 5000)
+        self.assertEqual(by_component["org.msys.notes:notes"]["pss_kib"], 5000)
         self.assertFalse(by_component["org.msys.hal.linux:native-manager"]["available"])
         self.assertEqual(
             by_component["org.msys.hal.linux:native-manager"]["reason"],

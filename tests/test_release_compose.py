@@ -166,6 +166,20 @@ class ReleaseComposeTests(unittest.TestCase):
         self.assertEqual(os.readlink(self.formal / "current"), current_before)
         self.assertEqual(os.readlink(self.formal / "previous"), previous_before)
 
+    def test_formal_maf_map_uses_split_application_packages(self) -> None:
+        self.assertNotIn("msys-apps", release_compose.MAF_ENTRY_PACKAGE_IDS)
+        self.assertEqual(
+            {
+                name: release_compose.MAF_ENTRY_PACKAGE_IDS[name]
+                for name in ("msys-notes", "msys-calculator", "msys-device-info")
+            },
+            {
+                "msys-notes": "org.msys.notes",
+                "msys-calculator": "org.msys.calculator",
+                "msys-device-info": "org.msys.device-info",
+            },
+        )
+
     def test_reusing_id_after_source_change_is_rejected(self) -> None:
         self.compose()
         (self.sources["msys-core"] / "source.txt").write_text(

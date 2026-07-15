@@ -429,9 +429,13 @@ class FastWorkflowTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertTrue(fast.call_args.kwargs["audio"])
 
-    def test_canonical_settings_and_apps_delivery_get_required_sdk_overlay(self) -> None:
+    def test_canonical_split_apps_and_legacy_bundle_get_required_sdk_overlay(self) -> None:
         for repository, package_id in (
             ("msys-settings", "org.msys.settings"),
+            ("msys-notes", "org.msys.notes"),
+            ("msys-calculator", "org.msys.calculator"),
+            ("msys-device-info", "org.msys.device-info"),
+            # Explicit compatibility delivery remains supported.
             ("msys-apps", "org.msys.apps"),
             ("msys-input-touch", "org.msys.input.touch"),
         ):
@@ -491,10 +495,10 @@ class FastWorkflowTests(unittest.TestCase):
                 self.assertIn(repository, output.getvalue())
 
     def test_batch_package_delivery_skips_source_sync_installs_in_order_and_reports_once(self) -> None:
-        repositories = ["msys-settings", "msys-apps", "msys-input-touch"]
+        repositories = ["msys-settings", "msys-calculator", "msys-input-touch"]
         package_ids = [
             "org.msys.settings",
-            "org.msys.apps",
+            "org.msys.calculator",
             "org.msys.input.touch",
         ]
         with tempfile.TemporaryDirectory() as temporary:
@@ -743,7 +747,7 @@ class FastWorkflowTests(unittest.TestCase):
         ):
             result = dev.command_fast(
                 self.context(),
-                ["msys-settings", "msys-apps"],
+                ["msys-settings", "msys-calculator"],
                 safe=False,
                 profile="mobile-spi",
                 runtime_dir="/tmp/msys-main",
@@ -887,7 +891,7 @@ class FastWorkflowTests(unittest.TestCase):
     def test_fast_cli_preserves_repeated_repository_order_for_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            repositories = ["msys-settings", "msys-apps", "msys-input-touch"]
+            repositories = ["msys-settings", "msys-calculator", "msys-input-touch"]
             with (
                 mock.patch.dict(os.environ, {"MSYS_DEV_TARGET": "root@device"}),
                 mock.patch.object(dev, "CONFIG_PATH", root / "missing.json"),

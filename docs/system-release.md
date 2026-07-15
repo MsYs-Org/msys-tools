@@ -90,7 +90,9 @@ python -m msys_tools.dev release compose 2026.07.13-8-mobile-rc1 `
   --maf msys-hal=/opt/msys-dev/release-inputs/HAL.maf `
   --maf msys-input-touch=/opt/msys-dev/release-inputs/INPUT.maf `
   --maf msys-settings=/opt/msys-dev/release-inputs/SETTINGS.maf `
-  --maf msys-apps=/opt/msys-dev/release-inputs/APPS.maf `
+  --maf msys-notes=/opt/msys-dev/release-inputs/NOTES.maf `
+  --maf msys-calculator=/opt/msys-dev/release-inputs/CALCULATOR.maf `
+  --maf msys-device-info=/opt/msys-dev/release-inputs/DEVICE_INFO.maf `
   --maf msys-openstick-ch347=/opt/msys-dev/release-inputs/CH347.maf `
   --maf msys-install=/opt/msys-dev/release-inputs/INSTALL.maf
 ```

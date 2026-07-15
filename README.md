@@ -144,15 +144,16 @@ native Core rebuild; enter a repository or pass `--repo` to synchronize code.
 
 ```powershell
 .\msys.cmd fast --repo msys-settings --deliver --screenshot .\artifacts\settings.png --force
-.\msys.cmd fast --repo msys-settings --repo msys-apps `
+.\msys.cmd fast --repo msys-settings --repo msys-calculator `
   --repo msys-input-touch --deliver
 ```
 
 `fast --deliver` also accepts repeatable
-`--overlay SOURCE=RELATIVE_DEST`. Canonical `msys-settings`, `msys-apps`, and
-`msys-input-touch` deliveries each require the sibling SDK at runtime, so when
-no explicit overlay is given, `fast` prints a notice and automatically applies
-this overlay to each applicable package independently:
+`--overlay SOURCE=RELATIVE_DEST`. Canonical `msys-settings`, `msys-notes`,
+`msys-calculator`, `msys-device-info`, and `msys-input-touch` deliveries each
+require the sibling SDK at runtime, so when no explicit overlay is given,
+`fast` applies it to each package independently. Explicit delivery of the
+pre-split `msys-apps` repository retains the same compatibility overlay:
 
 ```text
 msys-sdk/msys_sdk=files/app/msys_sdk
@@ -395,9 +396,9 @@ development runtime unless you explicitly want to.
 ## Complete source synchronization
 
 The default synchronization set includes contracts, core, SDK, the native and
-compatibility shells, X11, HAL, Settings, the ordinary application collection (`msys-apps`), the
-replaceable touch-input provider, installer, and tools. Missing requested
-repositories are an error instead of being
+compatibility shells, X11, HAL, Settings, the independent Notes, Calculator,
+and Device Info application repositories, the replaceable touch-input provider,
+installer, and tools. Missing requested repositories are an error instead of being
 silently skipped. Limit a debugging upload explicitly when needed:
 
 ```powershell
@@ -412,7 +413,7 @@ normalized.
 
 Except for the atomic native X11 policy build described above, synchronization
 copies source trees. Ordinary application manifests such as
-`msys-apps/manifest.json` are deliberately not appended to the canonical
+`msys-calculator/manifest.json` are deliberately not appended to the canonical
 `msysd --manifest` startup list: doing so would bypass the installer registry
 and make manual applications look like system services. Install or update them
 with the package delivery flow below.
@@ -680,8 +681,12 @@ After either success or a mid-test failure it stops only the app that it
 started, when necessary, and raises Home again:
 
 ```powershell
-wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev visual-smoke org.msys.apps:calculator
+wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev visual-smoke
 ```
+
+The default component is the split `org.msys.calculator:calculator`. On a board
+that has none of the split components yet, the probe can select the legacy
+calculator component and reports that compatibility selection in its JSON.
 
 The structured `msys.visual-smoke.v1` result includes bounded typed step
 outcomes and the cleanup record. A nonzero status means either the route or
@@ -696,6 +701,11 @@ application set, then exercises Notes, Calculator, and Device Info in order:
 .\msys.cmd ui-accept --timeout 20 `
   --display-log /tmp/ch347_dirty_usb_x11/live.log
 ```
+
+The canonical route uses `org.msys.notes:notes`,
+`org.msys.calculator:calculator`, and `org.msys.device-info:device-info`. A
+fully pre-split board is detected as a compatibility mode and reported through
+`component_contract`; partial/mixed installations fail with the missing ID.
 
 The `msys.p0-ui-acceptance.v1` JSON verifies the effective workarea, exact
 component/window identities, real bounded P6 window thumbnails, three-card
@@ -944,7 +954,7 @@ install agent to atomically commit a package in one command:
 ```powershell
 wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev package deliver /mnt/g/Code/MsYs/msys-settings --output /mnt/g/Code/MsYs/dist --force
 wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev package deliver /mnt/g/Code/MsYs/msys-hal --output /mnt/g/Code/MsYs/dist --force
-wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev package deliver /mnt/g/Code/MsYs/msys-apps --output /mnt/g/Code/MsYs/dist --force
+wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev package deliver /mnt/g/Code/MsYs/msys-calculator --output /mnt/g/Code/MsYs/dist --force
 wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev package deliver /mnt/g/Code/MsYs/msys-settings --format maf --output /mnt/g/Code/MsYs/dist --force
 ```
 

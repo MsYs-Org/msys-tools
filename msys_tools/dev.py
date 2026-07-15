@@ -80,7 +80,9 @@ DEFAULT_REPOS = [
     "msys-hal",
     "msys-audio",
     "msys-settings",
-    "msys-apps",
+    "msys-notes",
+    "msys-calculator",
+    "msys-device-info",
     "msys-input-touch",
     "msys-openstick-ch347",
     "msys-install",
@@ -136,8 +138,17 @@ DEFAULT_X11DISPLAY_REMOTE = "/root/x11display"
 DEFAULT_SYSTEM_RELEASE_ROOT = "/opt/msys"
 FAST_DELIVERY_RELEASE_INPUTS = frozenset({"msys-core", "msys-tools"})
 FAST_DELIVERY_SDK_REPOSITORIES = frozenset(
-    {"msys-settings", "msys-apps", "msys-input-touch"}
+    {
+        "msys-settings",
+        "msys-notes",
+        "msys-calculator",
+        "msys-device-info",
+        "msys-input-touch",
+        # Explicit compatibility delivery for pre-split workspaces.
+        "msys-apps",
+    }
 )
+DEFAULT_VISUAL_SMOKE_COMPONENT = "org.msys.calculator:calculator"
 FAST_DELIVERY_SDK_OVERLAY = "msys-sdk/msys_sdk=files/app/msys_sdk"
 X11DISPLAY_RUNTIME_BINARIES = (
     "bin/ch347_dirty_usb_sink",
@@ -6912,7 +6923,9 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         help="exercise typed Home/start/Back/Recents from a clean Home session",
     )
-    visual_smoke.add_argument("component")
+    visual_smoke.add_argument(
+        "component", nargs="?", default=DEFAULT_VISUAL_SMOKE_COMPONENT
+    )
     visual_smoke.add_argument("--timeout", type=_bounded_timeout, default=12.0)
     visual_smoke.add_argument("--runtime-dir")
 

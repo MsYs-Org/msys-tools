@@ -1,41 +1,49 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from msys_tools import dev
-from msys_tools.remote_visual_smoke import run_visual_smoke
+from msys_tools.remote_visual_smoke import (
+    DEFAULT_VISUAL_SMOKE_COMPONENT,
+    run_visual_smoke,
+)
 
 
-COMPONENT = "org.msys.apps:calculator"
+COMPONENT = DEFAULT_VISUAL_SMOKE_COMPONENT
 
 
 def returned(payload: dict) -> dict:
     return {"welcome": {}, "response": {"type": "return", "id": 1, "payload": payload}}
 
 
+def successful_replies(component: str):
+    return iter([
+        returned({
+            "components": [{
+                "id": component,
+                "launchable": True,
+                "lifecycle": "manual",
+                "state": "declared",
+            }]
+        }),
+        returned({"windows": []}),
+        returned({"windows": []}),
+        returned({"ok": True}),
+        returned({"component": component, "state": "ready", "activation": {"ok": True}}),
+        returned({"windows": [{"component": component, "id": "window-1"}]}),
+        returned({"ok": True, "closed_component": component}),
+        returned({"windows": []}),
+        returned({"ok": True}),
+    ])
+
+
 class VisualSmokeFlowTests(unittest.TestCase):
     def test_clean_flow_uses_only_typed_core_and_window_manager_calls(self) -> None:
-        replies = iter([
-            returned({
-                "components": [{
-                    "id": COMPONENT,
-                    "launchable": True,
-                    "lifecycle": "manual",
-                    "state": "declared",
-                }]
-            }),
-            returned({"windows": []}),
-            returned({"windows": []}),
-            returned({"ok": True}),
-            returned({"component": COMPONENT, "state": "ready", "activation": {"ok": True}}),
-            returned({"windows": [{"component": COMPONENT, "id": "window-1"}]}),
-            returned({"ok": True, "closed_component": COMPONENT}),
-            returned({"windows": []}),
-            returned({"ok": True}),
-        ])
+        replies = successful_replies(COMPONENT)
         calls: list[tuple[str, str, dict]] = []
 
         def rpc(_runtime: str, target: str, method: str, payload: dict, **_kwargs: object) -> dict:
@@ -66,6 +74,25 @@ class VisualSmokeFlowTests(unittest.TestCase):
         self.assertEqual({target for target, _method, _payload in calls}, {
             "msys.core", "role:window-manager"
         })
+
+    def test_canonical_default_falls_back_only_to_legacy_bundle_component(self) -> None:
+        legacy = "org.msys.apps:calculator"
+        replies = successful_replies(legacy)
+        calls: list[tuple[str, str, dict]] = []
+
+        def rpc(_runtime: str, target: str, method: str, payload: dict, **_kwargs: object) -> dict:
+            calls.append((target, method, payload))
+            return next(replies)
+
+        status, document = run_visual_smoke(
+            "/tmp/msys-main", COMPONENT, rpc_call=rpc
+        )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(document["requested_component"], COMPONENT)
+        self.assertEqual(document["component"], legacy)
+        self.assertEqual(document["compatibility"], "legacy-bundle-component")
+        self.assertIn(("msys.core", "start", {"component": legacy}), calls)
 
     def test_failed_back_stops_test_app_and_restores_home(self) -> None:
         replies = iter([
@@ -137,6 +164,17 @@ class VisualSmokeFlowTests(unittest.TestCase):
 
 
 class VisualSmokeHostCommandTests(unittest.TestCase):
+    def test_cli_defaults_to_split_calculator_component(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"MSYS_DEV_TARGET": "root@device"}),
+            mock.patch.object(dev, "CONFIG_PATH", Path("/missing/config.json")),
+            mock.patch.object(dev, "command_visual_smoke", return_value=0) as command,
+        ):
+            status = dev.main(["visual-smoke"])
+
+        self.assertEqual(status, 0)
+        self.assertEqual(command.call_args.args[2], COMPONENT)
+
     def test_host_wrapper_invokes_only_remote_typed_helper(self) -> None:
         context = dev.Context(
             Path("/workspace"),

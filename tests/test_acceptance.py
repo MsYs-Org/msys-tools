@@ -31,7 +31,7 @@ def report_document(*, ok: bool = True) -> dict[str, object]:
             ],
             "apps": [
                 {
-                    "id": "org.msys.apps:notes",
+                    "id": "org.msys.notes:notes",
                     "state": "declared",
                     "version": "0.1.8",
                 }

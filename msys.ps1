@@ -43,6 +43,7 @@ MSYS Windows development shortcut
   .\msys.cmd connect             # authenticate once; keeps SSH warm
   .\msys.cmd shell               # fastest loop: cd a repo, then mq/mqs/mqshot
   .\msys.cmd fast --repo msys-settings       # persistent broker + one debug bundle
+  cd .\msys-calculator; ..\msys.cmd q --deliver  # infers the split app repo
   .\msys.cmd audio-debug                     # one-SSH audio role/stack/RSS acceptance
   .\msys.cmd storage                        # one-SSH read-only space/USB cleanup plan
   .\msys.cmd accept                           # persistent broker + one read-only acceptance

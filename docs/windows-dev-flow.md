@@ -72,13 +72,14 @@ target-native HAL/Shell/X11 repositories still sync and build first. Repeated
 `--repo` values deliver in order, and `--full-sync` explicitly refreshes all
 remote source trees. Core/tools still require the release flow, while install-agent
 self-update requires the documented external/offline installer CLI. From the
-persistent shell, `mf` infers the current `msys-*` repository.
+persistent shell, `mf` infers the current `msys-*` repository, including
+`msys-notes`, `msys-calculator`, and `msys-device-info`.
 
 `--overlay SOURCE=RELATIVE_DEST` is repeatable. If none is supplied for the
-canonical `msys-settings` or `msys-apps` repositories, `fast` announces and
-adds `msys-sdk/msys_sdk=files/app/msys_sdk` automatically. An explicit overlay
-list always wins. This ensures those MAFs contain their runtime SDK instead of
-failing after installation and forcing the health gate to roll back.
+canonical Settings, Notes, Calculator, Device Info, or Input repositories,
+`fast` adds `msys-sdk/msys_sdk=files/app/msys_sdk` automatically. Explicit
+pre-split `msys-apps` delivery keeps this compatibility behavior. An explicit
+overlay list always wins.
 
 A bare `\.\msys.cmd q` at the workspace root is diagnostic-only. Repository
 inference happens only below an `msys-*` directory, so a status check cannot
@@ -267,8 +268,9 @@ providers and development tools may still use isolated language runtimes.
 development directory. Each repository is first uploaded to `.sync/NAME.new`,
 then swapped into place while retaining `.NAME.previous`; failed transfers do
 not erase the last complete tree. The default set includes `msys-hal`,
-`msys-settings`, `msys-apps`, and the replaceable `msys-input-touch` provider
-as well as core, shell, X11, installer, SDK, contracts, and tools.
+`msys-settings`, `msys-notes`, `msys-calculator`, `msys-device-info`, and the
+replaceable `msys-input-touch` provider as well as core, shell, X11, installer,
+SDK, contracts, and tools.
 
 For `msys-x11-session`, activation additionally requires `make all` to succeed
 inside `.sync/msys-x11-session.new` and produce an executable
@@ -294,9 +296,9 @@ must include `msys-x11-session` explicitly, or use `config unset repos` to
 restore the complete default. `MSYS_DEV_REPOS` can temporarily override that
 list with comma-separated repository names.
 
-The same default workspace root is used by `package discover`, so the root
-`msys-apps/manifest.json` is found and strictly validated with the system
-package manifests:
+The same default workspace root is used by `package discover`, so the split
+application manifests are found and strictly validated with the system package
+manifests:
 
 ```powershell
 wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev package discover
@@ -309,9 +311,8 @@ repositories without copying their manifests into core. The canonical X11
 manifest is loaded before the board-specific CH347 declaration, and the
 host-service launcher uses the same manifest list.
 
-`sync` only stages source code. In particular, `msys-apps/manifest.json` is an
-ordinary application package and is never passed to canonical `msysd` startup.
-Deliver it through the installer registry so manual/background lifecycle,
+`sync` only stages source code. Split application manifests are never passed to
+canonical `msysd` startup. Deliver them through the installer registry so lifecycle,
 version history, integrity hashes, and rollback remain consistent.
 
 Runtime remote update is handled by `msys-install` and the `update-agent`. That
@@ -403,7 +404,7 @@ command is convenient:
 
 ```powershell
 python -m msys_tools.dev package deliver G:\Code\MsYs\msys-settings --output G:\Code\MsYs\dist --force
-python -m msys_tools.dev package deliver G:\Code\MsYs\msys-apps --output G:\Code\MsYs\dist --force
+python -m msys_tools.dev package deliver G:\Code\MsYs\msys-calculator --output G:\Code\MsYs\dist --force
 ```
 
 It builds a reproducible archive, requires complete content hashes, verifies it
@@ -508,8 +509,12 @@ To exercise navigation semantics rather than pointer coordinates, first close
 all user applications and overlays so Home is clean, then run:
 
 ```powershell
-wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev visual-smoke org.msys.apps:calculator
+wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev visual-smoke
 ```
+
+The omitted component defaults to `org.msys.calculator:calculator`. A board
+that has no split application components yet may use the legacy calculator ID;
+the result marks that compatibility selection explicitly.
 
 This uses only typed Core/window-manager calls for Home, start, Back, and
 Recents. It refuses a running test component or non-empty user-window state;

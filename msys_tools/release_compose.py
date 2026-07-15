@@ -35,7 +35,9 @@ MAF_ENTRY_PACKAGE_IDS = {
     "msys-hal": "org.msys.hal.linux",
     "msys-input-touch": "org.msys.input.touch",
     "msys-settings": "org.msys.settings",
-    "msys-apps": "org.msys.apps",
+    "msys-notes": "org.msys.notes",
+    "msys-calculator": "org.msys.calculator",
+    "msys-device-info": "org.msys.device-info",
     "msys-openstick-ch347": "org.msys.openstick.ch347",
     "msys-install": "org.msys.core.install",
 }

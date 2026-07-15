@@ -35,7 +35,12 @@ CORE_VERSION_PATTERN = re.compile(
 
 CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
     "settings": ("org.msys.settings:",),
-    "apps": ("org.msys.apps:",),
+    "apps": (
+        "org.msys.notes:",
+        "org.msys.calculator:",
+        "org.msys.device-info:",
+        "org.msys.apps:",  # Pre-split compatibility only.
+    ),
     "input": ("org.msys.input.touch:",),
     "shell": ("org.msys.shell.native:", "org.msys.shell.pyside:"),
     "display": ("org.msys.openstick.ch347:", "org.msys.x11.session:"),

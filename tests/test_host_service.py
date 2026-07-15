@@ -101,7 +101,13 @@ class HostServiceTests(unittest.TestCase):
         self.assertIn('--manifest "$ch347_manifest"', launcher)
         self.assertIn('--manifest "$install_manifest"', launcher)
         self.assertIn('--manifest "$input_manifest"', launcher)
-        self.assertNotIn("$MSYS_ROOT/msys-apps/manifest.json", launcher)
+        for application in (
+            "msys-notes",
+            "msys-calculator",
+            "msys-device-info",
+            "msys-apps",
+        ):
+            self.assertNotIn(f"$MSYS_ROOT/{application}/manifest.json", launcher)
         self.assertNotIn("exec python3", launcher)
 
     def test_hook_install_is_idempotent_and_uninstall_preserves_user_content(self) -> None:

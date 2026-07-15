@@ -77,9 +77,10 @@ This is the same overlay used by `msys-dev run`; installing the host startup
 hook does not copy manifests into core or install a distribution Python
 package.
 
-Although developer synchronization includes the `msys-apps` source repository,
-the launcher intentionally never passes `msys-apps/manifest.json` to `msysd`.
-Ordinary applications must be installed with `package deliver msys-apps` so
+Although developer synchronization includes the split application repositories,
+the launcher intentionally never passes their manifests to `msysd`.
+Ordinary applications must be installed with `package deliver msys-calculator`
+(or the matching repository) so
 the package registry, integrity verification, update, and rollback rules apply.
 
 Every launcher also exports `MSYS_PLATFORM_PYTHONPATH` as exactly the matching

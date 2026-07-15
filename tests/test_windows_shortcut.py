@@ -243,6 +243,8 @@ $document | ConvertTo-Json -Compress -Depth 4
         self.assertIn('$fastBrokerDefault = $true', source)
         self.assertIn('if ($fastBrokerDefault) { "on" } else { "auto" }', source)
         self.assertIn('$candidateRepo', source)
+        self.assertIn('^msys-[A-Za-z0-9._-]+$', source)
+        self.assertIn("msys-calculator; ..\\msys.cmd q --deliver", source)
 
     def test_accept_shortcut_reuses_the_persistent_broker_without_repo_inference(self) -> None:
         source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(

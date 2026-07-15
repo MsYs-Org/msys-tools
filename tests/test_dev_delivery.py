@@ -299,11 +299,14 @@ class DeliveryCommandTests(unittest.TestCase):
         self.assertIn("msys-hal", dev.DEFAULT_REPOS)
         self.assertIn("msys-shell-native", dev.DEFAULT_REPOS)
         self.assertIn("msys-settings", dev.DEFAULT_REPOS)
-        self.assertIn("msys-apps", dev.DEFAULT_REPOS)
+        self.assertNotIn("msys-apps", dev.DEFAULT_REPOS)
+        self.assertIn("msys-notes", dev.DEFAULT_REPOS)
+        self.assertIn("msys-calculator", dev.DEFAULT_REPOS)
+        self.assertIn("msys-device-info", dev.DEFAULT_REPOS)
         self.assertIn("msys-input-touch", dev.DEFAULT_REPOS)
         self.assertIn("msys-openstick-ch347", dev.DEFAULT_REPOS)
         self.assertEqual(dev.DEFAULT_REPOS.count("msys-x11-session"), 1)
-        self.assertEqual(dev.DEFAULT_REPOS.count("msys-apps"), 1)
+        self.assertEqual(dev.DEFAULT_REPOS.count("msys-calculator"), 1)
         self.assertEqual(len(dev.DEFAULT_REPOS), len(set(dev.DEFAULT_REPOS)))
 
     def test_sync_environment_repositories_override_config_and_are_normalized(self) -> None:
@@ -681,7 +684,13 @@ class DeliveryCommandTests(unittest.TestCase):
         self.assertIn("test -S '/tmp/msys-main/control.sock'", command)
         self.assertIn("refusing to start a duplicate msysd", command)
         self.assertNotIn("python3 -m msys_core", command)
-        self.assertNotIn("/opt/msys-dev/msys-apps/manifest.json", command)
+        for application in (
+            "msys-notes",
+            "msys-calculator",
+            "msys-device-info",
+            "msys-apps",
+        ):
+            self.assertNotIn(f"/opt/msys-dev/{application}/manifest.json", command)
 
     def test_compatibility_service_script_uses_private_runtime_and_overlays(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -718,7 +727,13 @@ class DeliveryCommandTests(unittest.TestCase):
         self.assertIn("MALLOC_ARENA_MAX", source)
         self.assertIn("MALLOC_TRIM_THRESHOLD_=", source)
         self.assertNotIn("exec python3", source)
-        self.assertNotIn("$MSYS_ROOT/msys-apps/manifest.json", source)
+        for application in (
+            "msys-notes",
+            "msys-calculator",
+            "msys-device-info",
+            "msys-apps",
+        ):
+            self.assertNotIn(f"$MSYS_ROOT/{application}/manifest.json", source)
 
     def test_application_repository_is_delivered_as_a_package(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

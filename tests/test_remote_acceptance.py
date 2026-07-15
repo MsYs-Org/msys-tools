@@ -20,7 +20,7 @@ class RemoteAcceptanceTests(unittest.TestCase):
                 "package_root": "/release/settings",
             },
             {
-                "id": "org.msys.apps:notes",
+                "id": "org.msys.notes:notes",
                 "state": "declared",
                 "lifecycle": "manual",
                 "package_version": "0.1.8",
@@ -51,6 +51,7 @@ class RemoteAcceptanceTests(unittest.TestCase):
         self.assertEqual(categories["settings"][0]["version"], "0.2.10")
         self.assertEqual(categories["settings"][0]["state"], "declared")
         self.assertEqual(categories["settings"][0]["path"], "/release/settings")
+        self.assertEqual(categories["apps"][0]["id"], "org.msys.notes:notes")
         self.assertEqual(categories["display"][0]["version"], "0.1.11")
 
     def test_unselected_background_alternative_is_reported_without_false_failure(self) -> None:
