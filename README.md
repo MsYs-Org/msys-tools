@@ -553,8 +553,9 @@ remains available for shells where JSON quoting is already controlled; it
 cannot be combined with `--field`.
 
 The Apps key opens the replaceable `task-switcher` role. Back dismisses that
-panel first; a second Back closes the foreground MSYS component through its
-normal lifecycle rather than reporting it as a crash.
+panel first; at an application's root a second Back minimizes it, keeps it in
+the background/Recents set, and reveals Home. Only an explicit Recents Close
+stops the component through its normal lifecycle.
 
 The actual X11 pointer path can be exercised remotely without installing
 `xdotool` or any target package. With no selector, `tap` and `swipe` resolve the
@@ -715,8 +716,9 @@ fully pre-split board is detected as a compatibility mode and reported through
 
 The `msys.p0-ui-acceptance.v1` JSON verifies the effective workarea, exact
 component/window identities, real bounded P6 window thumbnails, three-card
-Recents data and visible overlay, card activation and close, Back dismissal,
-Back application exit, and a bounded notification toast. After all three test
+Recents data and visible overlay, card activation and explicit close, Back
+dismissal, Back application backgrounding/Home, and a bounded notification
+toast. After all three test
 apps are ready, the same helper also reports `/proc/*/smaps_rollup` RSS/PSS for
 Core, Native Shell, Native HAL, Notes, Calculator, and Device Info. Missing
 processes, permissions, or kernel files are explicit `unavailable` evidence;
@@ -724,7 +726,7 @@ they do not start another SSH connection. The route uses typed Core,
 window-manager, task-switcher, and broadcast calls rather than synthetic touch
 coordinates. In `finally`, it hides the test Recents overlay, stops only test
 applications that were not originally running, restarts any original manual
-application that the route closed, and restores the original foreground order
+application that the route explicitly closed, and restores the original foreground order
 or Home. A restoration mismatch makes the command fail.
 
 When the display sink emits a line such as `dirty_stats frame=...`, the newest

@@ -426,6 +426,9 @@ def run_p0_ui_acceptance(
     def inventory(step: str) -> list[dict[str, Any]]:
         return _records(rpc("msys.core", "list_components", {}, step), "components", step)
 
+    def foreground(step: str) -> list[dict[str, Any]]:
+        return _records(rpc("msys.core", "foreground_stack", {}, step), "windows", step)
+
     def windows(step: str) -> list[dict[str, Any]]:
         return _records(rpc("role:window-manager", "recents", {}, step), "windows", step)
 
@@ -697,6 +700,7 @@ def run_p0_ui_acceptance(
                 for key in (
                     "ok",
                     "dismissed",
+                    "backgrounded_component",
                     "closed_component",
                     "destination",
                     "reason",
@@ -709,14 +713,14 @@ def run_p0_ui_acceptance(
             "role:window-manager",
             "navigation_action",
             {"action": "back", "input": "debug"},
-            "back.close",
+            "back.background",
         )
         back_actions = [back_evidence(first_back)]
         first_back_result = navigation_result(first_back)
         if first_back_result.get("dismissed") is not None:
             if first_back_result.get("dismissed") != "input-method":
                 raise P0UIAcceptanceError(
-                    "back.close dismissed an unexpected overlay: "
+                    "back.background dismissed an unexpected overlay: "
                     f"{first_back_result.get('dismissed')}"
                 )
             wait(
@@ -732,18 +736,53 @@ def run_p0_ui_acceptance(
                 "role:window-manager",
                 "navigation_action",
                 {"action": "back", "input": "debug"},
-                "back.close-application",
+                "back.background-application",
             )
             back_actions.append(back_evidence(second_back))
-        wait(
-            "back.close",
-            lambda: inventory("back.close"),
-            lambda items: stopped(items, back_component),
+        background_stack = wait(
+            "back.background",
+            lambda: foreground("back.background"),
+            lambda items: any(
+                item.get("component") == back_component
+                and item.get("state") == "background"
+                for item in items
+            ),
         )
+        background_windows = wait(
+            "back.home-visible",
+            lambda: windows("back.home-visible"),
+            lambda items: bool(
+                _visible_role(items, "launcher")
+                and not any(
+                    item.get("component") == back_component
+                    and item.get("state") == "visible"
+                    for item in items
+                )
+            ),
+        )
+        back_inventory = inventory("back.component-still-running")
+        back_state = next(
+            (
+                item.get("state")
+                for item in back_inventory
+                if item.get("id") == back_component
+            ),
+            None,
+        )
+        if back_state != "ready":
+            raise P0UIAcceptanceError(
+                f"Back terminated or degraded the application: {back_component} state={back_state}"
+            )
         checks["back_application"] = {
             "component": back_component,
             "input_method_before": input_method_before,
             "actions": back_actions,
+            "state": "background",
+            "process_state": back_state,
+            "home_visible": _visible_role(background_windows, "launcher"),
+            "foreground_entry": next(
+                item for item in background_stack if item.get("component") == back_component
+            ),
         }
 
         toast_pending = True

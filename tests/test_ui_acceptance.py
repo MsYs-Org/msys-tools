@@ -55,6 +55,7 @@ class FakeP0Runtime:
                 if component in self.running
             ]
         )
+        self.backgrounded: set[str] = set()
         self.task_visible = False
         self.task_above_apps = True
         self.toast_visible = False
@@ -81,6 +82,7 @@ class FakeP0Runtime:
 
     def focus(self, component: str) -> None:
         self.running.add(component)
+        self.backgrounded.discard(component)
         self.foreground = [
             component,
             *(item for item in self.foreground if item != component),
@@ -90,6 +92,7 @@ class FakeP0Runtime:
 
     def stop(self, component: str) -> None:
         self.running.discard(component)
+        self.backgrounded.discard(component)
         self.foreground = [item for item in self.foreground if item != component]
         if component == self.input_method_component:
             self.input_method_visible = False
@@ -107,7 +110,12 @@ class FakeP0Runtime:
                     "identity": self.identities[component],
                     "role": "application",
                     "kind": "application",
-                    "state": "visible" if component == self.foreground[0] else "minimized",
+                    "state": (
+                        "visible"
+                        if component == self.foreground[0]
+                        and component not in self.backgrounded
+                        else "minimized"
+                    ),
                     "source": "x11",
                     "geometry": {"x": 0, "y": 42, "width": 320, "height": 396},
                     "thumbnail": "/tmp/msys-main/window-thumbnails/"
@@ -115,6 +123,17 @@ class FakeP0Runtime:
                     + ".ppm",
                 }
             )
+        result.append(
+            {
+                "id": "msys.x11-window.v1:launcher",
+                "native_id": "0x90",
+                "identity": "org.msys.shell.native.launcher",
+                "role": "launcher",
+                "kind": "launcher",
+                "state": "visible",
+                "source": "x11",
+            }
+        )
         if self.task_visible:
             task_window = {
                 "id": "msys.x11-window.v1:recents",
@@ -188,7 +207,20 @@ class FakeP0Runtime:
             return returned({"components": self.descriptors()})
         if target == "msys.core" and method == "foreground_stack":
             return returned(
-                {"windows": [{"component": item} for item in self.foreground]}
+                {
+                    "windows": [
+                        {
+                            "component": item,
+                            "state": (
+                                "background"
+                                if item in self.backgrounded
+                                or self.foreground.index(item) > 0
+                                else "ready"
+                            ),
+                        }
+                        for item in self.foreground
+                    ]
+                }
             )
         if target == "msys.core" and method == "start":
             component = str(payload["component"])
@@ -242,9 +274,13 @@ class FakeP0Runtime:
                     }
                 )
             if self.foreground:
-                closed = self.foreground[0]
-                self.stop(closed)
-                return returned({"ok": True, "closed_component": closed})
+                backgrounded = self.foreground[0]
+                self.backgrounded.add(backgrounded)
+                return returned({
+                    "ok": True,
+                    "backgrounded_component": backgrounded,
+                    "destination": "home",
+                })
             return returned({"ok": True, "destination": "home"})
         if target == "role:window-manager" and method == "home":
             return returned({"ok": True, "role": "launcher"})
@@ -451,7 +487,7 @@ class P0UIAcceptanceTests(unittest.TestCase):
         self.assertIn(extra, runtime.running)
         self.assertIn("manual set mismatch", document["error"])
 
-    def test_back_hides_input_method_then_closes_application(self) -> None:
+    def test_back_hides_input_method_then_backgrounds_application(self) -> None:
         runtime = FakeP0Runtime(input_method_component=DEFAULT_COMPONENTS[2])
 
         status, document = run_p0_ui_acceptance(
@@ -477,10 +513,14 @@ class P0UIAcceptanceTests(unittest.TestCase):
                 },
                 {
                     "ok": True,
-                    "closed_component": DEFAULT_COMPONENTS[2],
+                    "backgrounded_component": DEFAULT_COMPONENTS[2],
+                    "destination": "home",
                 },
             ],
         )
+        self.assertEqual(evidence["state"], "background")
+        self.assertEqual(evidence["process_state"], "ready")
+        self.assertTrue(evidence["home_visible"])
         back_calls = [
             payload
             for target, method, payload in runtime.calls
