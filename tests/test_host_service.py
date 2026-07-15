@@ -109,6 +109,23 @@ class HostServiceTests(unittest.TestCase):
         ):
             self.assertNotIn(f"$MSYS_ROOT/{application}/manifest.json", launcher)
         self.assertNotIn("exec python3", launcher)
+        self.assertNotIn("\0", launcher)
+
+    def test_launcher_exports_no_bytecode_guard_before_release_resolution(self) -> None:
+        spec = HostServiceSpec(
+            root="/opt/msys/current",
+            python="/opt/msys/current/.runtime/python/bin/python3",
+            release_root="/opt/msys",
+        )
+        launcher = render_launcher(spec)
+
+        self.assertEqual(launcher.count("PYTHONDONTWRITEBYTECODE=1"), 1)
+        self.assertLess(
+            launcher.index("PYTHONDONTWRITEBYTECODE=1"),
+            launcher.index("resolve_start_root()"),
+        )
+        self.assertIn("set -- -B -m msys_core.msysd --foreground", launcher)
+        self.assertIn("exec setsid \"$MSYS_PYTHON\" \"$@\"", launcher)
 
     def test_hook_install_is_idempotent_and_uninstall_preserves_user_content(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

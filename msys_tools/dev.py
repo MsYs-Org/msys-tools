@@ -5324,6 +5324,7 @@ def _remote_release_command(
 ) -> subprocess.CompletedProcess[str]:
     root = _normalise_remote_release_root(release_root)
     argv = [
+        "-B",
         "-m",
         "msys_install.release",
         "--release-root",
@@ -6759,6 +6760,17 @@ def build_parser() -> argparse.ArgumentParser:
     release_sub.add_parser("status", parents=[release_common])
     release_verify = release_sub.add_parser("verify", parents=[release_common])
     release_verify.add_argument("release_id")
+    release_repair = release_sub.add_parser(
+        "repair-python-cache",
+        parents=[release_common],
+        help="preview or repair only digest-proven post-release CPython caches",
+    )
+    release_repair.add_argument("release_id")
+    release_repair.add_argument("--apply", action="store_true")
+    release_repair.add_argument(
+        "--backup",
+        help="absolute target path for the required cache backup archive",
+    )
     release_prune = release_sub.add_parser("prune", parents=[release_common])
     release_prune.add_argument("--keep", type=int, default=3)
     release_sub.add_parser("recover", parents=[release_common])
@@ -7616,6 +7628,19 @@ def main(argv: list[str] | None = None) -> int:
             if args.release_command == "verify":
                 return command_release_simple(
                     ctx, release_root, "verify", [args.release_id]
+                )
+            if args.release_command == "repair-python-cache":
+                arguments = [args.release_id]
+                if args.backup and not args.apply:
+                    parser.error("release repair-python-cache --backup requires --apply")
+                if args.apply:
+                    arguments.append("--apply")
+                if args.backup:
+                    arguments.extend(
+                        ["--backup", _normalise_remote_source_root(args.backup)]
+                    )
+                return command_release_simple(
+                    ctx, release_root, "repair-python-cache", arguments
                 )
             if args.release_command == "prune":
                 keep = int(args.keep)

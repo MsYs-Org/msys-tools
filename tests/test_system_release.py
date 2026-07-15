@@ -35,6 +35,7 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
         command = capture.call_args.args[1]
         self.assertIn("PYTHONPATH='/opt/msys-dev/msys-install'", command)
         self.assertIn("'/opt/msys-dev/.runtime/python/bin/python3'", command)
+        self.assertIn("'/opt/msys-dev/.runtime/python/bin/python3' '-B' '-m'", command)
         self.assertIn("'--release-root' '/opt/msys' 'verify' 'release-1'", command)
         lowered = command.lower()
         for forbidden in ("systemctl", "dbus", "apt ", "apt-get", "pip install"):
@@ -355,6 +356,40 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
             ["host-service", "install", "--release-root", "/opt/msys"]
         )
         self.assertEqual(service.release_root, "/opt/msys")
+
+    def test_cache_repair_is_preview_by_default_and_apply_is_explicit(self) -> None:
+        parser = dev.build_parser()
+        preview = parser.parse_args(
+            ["release", "repair-python-cache", "dirty-1"]
+        )
+        self.assertFalse(preview.apply)
+        self.assertIsNone(preview.backup)
+
+        with mock.patch.object(dev, "command_release_simple", return_value=0) as remote:
+            result = dev.main(
+                [
+                    "release",
+                    "repair-python-cache",
+                    "dirty-1",
+                    "--apply",
+                    "--backup",
+                    "/opt/msys/repair-backups/dirty-1.tar.gz",
+                ]
+            )
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            remote.call_args.args[1:],
+            (
+                "/opt/msys",
+                "repair-python-cache",
+                [
+                    "dirty-1",
+                    "--apply",
+                    "--backup",
+                    "/opt/msys/repair-backups/dirty-1.tar.gz",
+                ],
+            ),
+        )
 
 
 if __name__ == "__main__":

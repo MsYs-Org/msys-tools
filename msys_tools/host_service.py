@@ -154,6 +154,10 @@ MSYS_LOG_FILE=${{MSYS_LOG_FILE:-$MSYS_LOG_DEFAULT}}
 MSYS_PROFILE=${{MSYS_PROFILE:-$MSYS_PROFILE_DEFAULT}}
 MSYS_CONFIG_DIR=${{MSYS_CONFIG_DIR:-$MSYS_CONFIG_DEFAULT}}
 MSYS_RELEASE_ROOT=${{MSYS_RELEASE_ROOT:-$MSYS_RELEASE_ROOT_DEFAULT}}
+# This launcher is the trust boundary for the complete formal process tree.
+# Export the guard before resolving or executing the selected release.
+PYTHONDONTWRITEBYTECODE=1
+export PYTHONDONTWRITEBYTECODE
 PID_FILE="$MSYS_RUNTIME_DIR/msysd.pid"
 
 resolve_start_root() {{
@@ -182,8 +186,6 @@ resolve_start_root() {{
     fi
     MSYS_PLATFORM_PYTHONPATH="$MSYS_ROOT/msys-sdk"
     export MSYS_PLATFORM_PYTHONPATH
-    PYTHONDONTWRITEBYTECODE=1
-    export PYTHONDONTWRITEBYTECODE
     MALLOC_ARENA_MAX="${{MALLOC_ARENA_MAX:-2}}"
     export MALLOC_ARENA_MAX
     # A fixed threshold prevents glibc's dynamic trim heuristic from retaining
@@ -222,7 +224,7 @@ find_external_msysd() {{
         candidate=${{command_file#/proc/}}
         candidate=${{candidate%/cmdline}}
         case "$candidate" in ''|*[!0-9]*|$$) continue ;; esac
-        command_line=$(tr '\000' ' ' < "$command_file")
+        command_line=$(tr '\\000' ' ' < "$command_file")
         case "$command_line" in
             *msys_core.msysd*"$MSYS_RUNTIME_DIR"*)
                 external_pid=$candidate
@@ -257,7 +259,7 @@ start_service() {{
         export MSYS_STATE_DIR
         export MSYS_PLATFORM_PYTHONPATH
         export PYTHONPATH="$MSYS_ROOT/msys-core:$MSYS_ROOT/msys-sdk:$MSYS_ROOT/msys-shell-pyside:$MSYS_ROOT/msys-x11-session:$MSYS_ROOT/msys-hal:$MSYS_ROOT/msys-input-touch/files/app:$MSYS_ROOT/msys-install"
-        set -- -m msys_core.msysd --foreground \\
+        set -- -B -m msys_core.msysd --foreground \\
             --config "$MSYS_CONFIG_DIR" \\
             --runtime-dir "$MSYS_RUNTIME_DIR" \\
             --profile "$MSYS_PROFILE"

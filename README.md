@@ -836,6 +836,23 @@ providers can finish initialization. `--health-timeout SECONDS` accepts 10 to
 180 seconds on `stage`, `activate`, and `rollback`; the same deadline is used
 for the candidate and an automatic recovery start.
 
+The formal launcher exports `PYTHONDONTWRITEBYTECODE=1` for the complete Core
+and component process tree and invokes Core with Python `-B`. Release operator
+commands use both guards too. If an older manual invocation already created
+isolated-runtime caches, use the narrow digest-proven repair:
+
+```powershell
+python -m msys_tools.dev release repair-python-cache RELEASE_ID
+python -m msys_tools.dev release repair-python-cache RELEASE_ID --apply `
+  --backup /opt/msys/repair-backups/RELEASE_ID-python-cache.tar.gz
+python -m msys_tools.dev release verify RELEASE_ID
+```
+
+The first command is read-only. Apply is refused unless removing only the
+strict post-release CPython-cache whitelist reproduces the recorded digest. It
+backs up those files outside `releases/`, invokes the ordinary verifier after
+deletion, and never changes `release.json`.
+
 See [docs/system-release.md](docs/system-release.md) for the pointer journal,
 retention, service migration, and recovery flow.
 

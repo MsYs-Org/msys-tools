@@ -41,6 +41,11 @@ and uses that resolved directory for Python, config, manifests, SDK platform
 ABI, and `PYTHONPATH`. A later pointer switch cannot mix files from two releases
 inside an already running process.
 
+The launcher exports `PYTHONDONTWRITEBYTECODE=1` before resolving a release and
+invokes Core with Python `-B`. Core and every component inherit the guard. This
+is required because the service runs as root, which can bypass read-only mode
+bits. Tools invokes every release operator command with the same two guards.
+
 ## First formal deployment
 
 Synchronize and validate the normal target workspace first. In particular, it
@@ -103,6 +108,9 @@ idempotent; reusing an id for different content is refused. MAF symlinks,
 escaping links, incomplete hashes, package-id mismatches, `__pycache__`, and
 `.pyc` are rejected. `release compose` does not stage, activate, restart a
 service, install a package, or modify `current`/`previous`.
+
+Direct `release stage` also rejects `__pycache__`, `.pyc`, and recognized tool
+cache input instead of silently producing bytes different from its source.
 
 Review, stage, and verify the candidate as separate operations. Omitting
 `--activate` is intentional during candidate audit:
@@ -191,6 +199,35 @@ python -m msys_tools.dev release prune --keep 3
 
 Release ids are immutable. An identical retry is idempotent; a retry with
 different bytes fails and requires a new id.
+
+## Narrow recovery for historical Python caches
+
+An old manual invocation may have run a release's Python without the bytecode
+guard. Do not delete arbitrary files or replace `content_sha256`. Preview the
+only supported repair first:
+
+```powershell
+python -m msys_tools.dev release repair-python-cache RELEASE_ID
+```
+
+The preview is read-only. It lists only post-`release.json`, regular,
+non-executable, single-link CPython caches under
+`.runtime/python/lib/pythonX.Y/**/__pycache__`. The complete tree digest with
+that exact file-and-directory set omitted must equal the immutable metadata
+digest. Unrelated changes are therefore still a hard failure.
+
+After reviewing every path, apply with a backup outside `releases/`:
+
+```powershell
+python -m msys_tools.dev release repair-python-cache RELEASE_ID --apply `
+  --backup /opt/msys/repair-backups/RELEASE_ID-python-cache.tar.gz
+python -m msys_tools.dev release verify RELEASE_ID
+```
+
+Apply rechecks the plan under the release lock, backs up every candidate,
+deletes only that whitelist, and calls ordinary `verify`. It never rewrites
+metadata or bypasses the digest. On an unexpected verify failure it restores
+the cache backup and reports failure.
 
 ## Interrupted transactions and manual recovery
 
