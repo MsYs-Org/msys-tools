@@ -38,6 +38,7 @@ DIRTY_STATS = re.compile(
     r"large_refreshes=(\d+)\s+sent_pixels=(\d+)\s+"
     r"last_sent_pixels=(\d+)\s+last_rects=(\d+)"
 )
+X11_STACKING_SCHEMA = "msys.x11-stacking-evidence.v1"
 
 
 class P0UIAcceptanceError(RuntimeError):
@@ -199,6 +200,62 @@ def read_dirty_stats(log_file: str) -> dict[str, Any]:
             return result
     result["reason"] = "no dirty_stats record"
     return result
+
+
+def check_task_switcher_stacking(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Validate the native XQueryTree top-to-bottom order returned by the WM."""
+
+    roles = {"application", "launcher", "task-switcher", "input-method"}
+    fields = ("native_id", "component", "identity", "role", "state", "source")
+    relevant = [
+        {"index": index, **{key: item.get(key) for key in fields}}
+        for index, item in enumerate(items)
+        if item.get("role") in roles
+    ]
+    evidence: dict[str, Any] = {
+        "schema": X11_STACKING_SCHEMA,
+        "ok": False,
+        "source": "window-policy-native-XQueryTree",
+        "order": "top-to-bottom",
+        "windows": relevant,
+        "ignored_roles": ["input-method"],
+    }
+    invalid_native = [
+        item
+        for item in relevant
+        if item.get("source") != "x11"
+        or not re.fullmatch(r"0x[0-9a-fA-F]+", str(item.get("native_id") or ""))
+    ]
+    if invalid_native:
+        evidence["reason"] = "stack contains non-native window records"
+        evidence["invalid_native"] = invalid_native
+        return evidence
+    switchers = [
+        item
+        for item in relevant
+        if item.get("role") == "task-switcher" and item.get("state") == "visible"
+    ]
+    surfaces = [item for item in relevant if item.get("role") in roles & {"application", "launcher"}]
+    if len(switchers) != 1 or not surfaces:
+        evidence["reason"] = (
+            f"expected one visible task-switcher and application/launcher surfaces; "
+            f"found switchers={len(switchers)} surfaces={len(surfaces)}"
+        )
+        return evidence
+    switcher = switchers[0]
+    violations = [item for item in surfaces if item["index"] < switcher["index"]]
+    evidence.update(task_switcher=switcher, checked_surfaces=surfaces, violations=violations)
+    if violations:
+        offenders = ", ".join(
+            f"{item.get('role')}:{item.get('component') or item.get('identity') or item.get('native_id')}@{item['index']}"
+            for item in violations
+        )
+        evidence["reason"] = (
+            f"task-switcher@{switcher['index']} is below X11 surface(s): {offenders}"
+        )
+        return evidence
+    evidence["ok"] = True
+    return evidence
 
 
 def collect_process_memory(
@@ -493,7 +550,7 @@ def run_p0_ui_acceptance(
             lambda: task_list("recents.cards"),
             lambda items: all(_window(items, component) for component in components),
         )
-        wait(
+        visible_windows = wait(
             "recents.visible",
             lambda: windows("recents.visible"),
             lambda items: _visible_role(items, "task-switcher"),
@@ -510,7 +567,18 @@ def run_p0_ui_acceptance(
                     "thumbnail": thumbnail_probe(str(item["thumbnail"]), runtime_dir),
                 }
             )
-        checks["recents"] = {"count": len(tasks), "cards": cards, "visible": True}
+        stacking = check_task_switcher_stacking(visible_windows)
+        checks["recents"] = {
+            "count": len(tasks),
+            "cards": cards,
+            "visible": True,
+            "x11_stacking": stacking,
+        }
+        if stacking.get("ok") is not True:
+            raise P0UIAcceptanceError(
+                "Recents X11 stacking check failed: "
+                + str(stacking.get("reason") or "unknown stacking failure")
+            )
 
         activate_component = components[0]
         rpc(

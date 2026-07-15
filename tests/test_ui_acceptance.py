@@ -11,6 +11,7 @@ from msys_tools import dev
 from msys_tools.remote_ui_acceptance import (
     DEFAULT_COMPONENTS,
     P0UIAcceptanceError,
+    check_task_switcher_stacking,
     collect_process_memory,
     probe_thumbnail,
     read_dirty_stats,
@@ -54,6 +55,7 @@ class FakeP0Runtime:
             ]
         )
         self.task_visible = False
+        self.task_above_apps = True
         self.toast_visible = False
         self.input_method_component = input_method_component
         self.input_method_visible = False
@@ -99,11 +101,13 @@ class FakeP0Runtime:
             result.append(
                 {
                     "id": "msys.x11-window.v1:" + component,
+                    "native_id": f"0x{0x100 + self.foreground.index(component):x}",
                     "component": component,
                     "identity": self.identities[component],
                     "role": "application",
                     "kind": "application",
                     "state": "visible" if component == self.foreground[0] else "minimized",
+                    "source": "x11",
                     "geometry": {"x": 0, "y": 42, "width": 320, "height": 396},
                     "thumbnail": "/tmp/msys-main/window-thumbnails/"
                     + component.replace(":", "-")
@@ -111,25 +115,30 @@ class FakeP0Runtime:
                 }
             )
         if self.task_visible:
-            result.insert(
-                0,
-                {
-                    "id": "msys.x11-window.v1:recents",
-                    "identity": "org.msys.shell.task-switcher",
-                    "role": "task-switcher",
-                    "kind": "overlay",
-                    "state": "visible",
-                },
-            )
+            task_window = {
+                "id": "msys.x11-window.v1:recents",
+                "native_id": "0x200",
+                "identity": "org.msys.shell.task-switcher",
+                "role": "task-switcher",
+                "kind": "overlay",
+                "state": "visible",
+                "source": "x11",
+            }
+            if self.task_above_apps:
+                result.insert(0, task_window)
+            else:
+                result.append(task_window)
         if self.toast_visible:
             result.insert(
                 0,
                 {
                     "id": "msys.x11-window.v1:toast",
+                    "native_id": "0x201",
                     "identity": "org.msys.shell.native.notifications",
                     "role": "notification-presenter",
                     "kind": "overlay",
                     "state": "visible",
+                    "source": "x11",
                 },
             )
         if self.input_method_visible:
@@ -137,10 +146,12 @@ class FakeP0Runtime:
                 0,
                 {
                     "id": "msys.x11-window.v1:input-method",
+                    "native_id": "0x202",
                     "identity": "org.msys.input.touch.keyboard",
                     "role": "input-method",
                     "kind": "overlay",
                     "state": "visible",
+                    "source": "x11",
                 },
             )
         return result
@@ -326,6 +337,11 @@ class P0UIAcceptanceTests(unittest.TestCase):
         )
         self.assertFalse(document["dirty_stats"]["available"])
         self.assertTrue(document["dirty_stats"]["evidence_only"])
+        self.assertTrue(document["checks"]["recents"]["x11_stacking"]["ok"])
+        self.assertEqual(
+            document["checks"]["recents"]["x11_stacking"]["order"],
+            "top-to-bottom",
+        )
 
     def test_foreground_manual_missing_from_running_snapshot_is_not_a_false_failure(self) -> None:
         runtime = FakeP0Runtime(
@@ -464,6 +480,75 @@ class P0UIAcceptanceTests(unittest.TestCase):
         self.assertFalse(
             any(method in {"start", "stop"} for _target, method, _payload in runtime.calls)
         )
+
+    def test_stacking_check_ignores_input_method_but_not_applications(self) -> None:
+        windows = [
+            {
+                "native_id": "0x50",
+                "role": "input-method",
+                "kind": "overlay",
+                "state": "visible",
+                "source": "x11",
+            },
+            {
+                "native_id": "0x40",
+                "role": "task-switcher",
+                "kind": "overlay",
+                "state": "visible",
+                "source": "x11",
+            },
+            {
+                "native_id": "0x30",
+                "component": "org.msys.apps:calculator",
+                "role": "application",
+                "kind": "application",
+                "state": "visible",
+                "source": "x11",
+            },
+            {
+                "native_id": "0x20",
+                "component": "org.msys.shell.native:launcher",
+                "role": "launcher",
+                "kind": "launcher",
+                "state": "visible",
+                "source": "x11",
+            },
+        ]
+
+        checked = check_task_switcher_stacking(windows)
+
+        self.assertTrue(checked["ok"])
+        self.assertEqual(checked["ignored_roles"], ["input-method"])
+        self.assertEqual(checked["task_switcher"]["index"], 1)
+        self.assertEqual(
+            {item["role"] for item in checked["checked_surfaces"]},
+            {"application", "launcher"},
+        )
+
+        windows[-1]["source"] = "msys.core"
+        rejected = check_task_switcher_stacking(windows)
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["invalid_native"][0]["role"], "launcher")
+
+    def test_recents_fails_with_x11_evidence_when_application_is_above_it(self) -> None:
+        runtime = FakeP0Runtime()
+        runtime.task_above_apps = False
+
+        status, document = run_p0_ui_acceptance(
+            "/tmp/msys-main",
+            rpc_call=runtime,
+            sleep=runtime.sleep,
+            thumbnail_probe=fake_thumbnail,
+            memory_probe=fake_memory,
+            display_log="/missing/old-sink.log",
+        )
+
+        self.assertEqual(status, 1)
+        self.assertTrue(document["restored"])
+        stacking = document["checks"]["recents"]["x11_stacking"]
+        self.assertFalse(stacking["ok"])
+        self.assertEqual(stacking["violations"][0]["role"], "application")
+        self.assertIn("is below X11 surface", document["error"])
 
     def test_thumbnail_probe_requires_a_real_bounded_runtime_ppm(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
