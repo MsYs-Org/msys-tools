@@ -78,6 +78,7 @@ DEFAULT_REPOS = [
     "msys-shell-pyside",
     "msys-x11-session",
     "msys-hal",
+    "msys-audio",
     "msys-settings",
     "msys-apps",
     "msys-input-touch",
@@ -168,6 +169,7 @@ class TargetNativeArtifactSpec:
     repository: str
     relative_path: str
     probe: str
+    runtime_inventory_path: str | None = None
 
 
 TARGET_NATIVE_ARTIFACTS = {
@@ -189,10 +191,37 @@ TARGET_NATIVE_ARTIFACTS = {
         relative_path="bin/msys-x11-policy",
         probe="build-probe",
     ),
+    "org.msys.audio.bluez": TargetNativeArtifactSpec(
+        package_id="org.msys.audio.bluez",
+        repository="msys-audio",
+        relative_path="files/runtime/aarch64/bin/msys-hci-bootstrap",
+        probe="hci-bootstrap",
+        runtime_inventory_path="files/runtime/aarch64/runtime.json",
+    ),
+}
+TARGET_NATIVE_OPTIONAL_ARTIFACTS = {
+    "org.msys.audio.bluez": (
+        TargetNativeArtifactSpec(
+            package_id="org.msys.audio.bluez",
+            repository="msys-audio",
+            relative_path=(
+                "files/runtime/aarch64/bin/msys-audio-manager-native"
+            ),
+            probe="audio-manager-native",
+            runtime_inventory_path="files/runtime/aarch64/runtime.json",
+        ),
+    ),
 }
 TARGET_NATIVE_REPOSITORIES = {
     spec.repository: spec for spec in TARGET_NATIVE_ARTIFACTS.values()
 }
+
+
+def _target_native_package_specs(package_id: str) -> tuple[TargetNativeArtifactSpec, ...]:
+    primary = TARGET_NATIVE_ARTIFACTS.get(package_id)
+    if primary is None:
+        return ()
+    return (primary, *TARGET_NATIVE_OPTIONAL_ARTIFACTS.get(package_id, ()))
 
 
 def run_local(argv: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -1259,6 +1288,73 @@ def _probe_remote_native_binary(
                 f"{result.returncode}, expected 64"
             )
         probe = {"kind": "build-probe", "status": 64}
+    elif spec.probe == "hci-bootstrap":
+        result = ssh_capture(
+            ctx,
+            command_prefix
+            + f"{quote_sh(binary)} --self-test && "
+            + f"{quote_sh(binary)} --build-probe",
+            display_command=f"<run {spec.repository} native bootstrap checks>",
+        )
+        expected_lines = [
+            "msys-hci-bootstrap self-test: ok",
+            "msys-hci-bootstrap 1",
+        ]
+        actual_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if result.returncode != 0 or actual_lines != expected_lines:
+            _print_completed_output(result, error=True)
+            raise PackageFlowError(
+                f"target-native bootstrap probe failed for {spec.package_id}"
+            )
+        probe = {
+            "kind": "hci-bootstrap",
+            "self_test": expected_lines[0],
+            "build_probe": expected_lines[1],
+        }
+    elif spec.probe == "audio-manager-native":
+        result = ssh_capture(
+            ctx,
+            command_prefix
+            + f"{quote_sh(binary)} --self-check && "
+            + f"{quote_sh(binary)} --build-probe",
+            display_command=f"<run {spec.repository} native manager checks>",
+        )
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        try:
+            report = _decode_json_document(lines[0]) if lines else {}
+        except ValueError as exc:
+            raise PackageFlowError(
+                f"target-native audio manager returned invalid JSON for {spec.package_id}"
+            ) from exc
+        manager_version = report.get("version")
+        expected_build_probe = (
+            f"msys-audio-manager-native {manager_version} candidate"
+        )
+        rss_kib = report.get("rss_kib")
+        if (
+            result.returncode != 0
+            or len(lines) != 2
+            or report.get("ok") is not True
+            or not isinstance(manager_version, str)
+            or re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,2}", manager_version) is None
+            or report.get("stage") != "candidate"
+            or report.get("production_default") is not False
+            or isinstance(rss_kib, bool)
+            or not isinstance(rss_kib, int)
+            or rss_kib < 0
+            or lines[1] != expected_build_probe
+        ):
+            _print_completed_output(result, error=True)
+            raise PackageFlowError(
+                f"target-native audio manager probe failed for {spec.package_id}"
+            )
+        probe = {
+            "kind": "audio-manager-native",
+            "version": manager_version,
+            "stage": "candidate",
+            "production_default": False,
+            "build_probe": expected_build_probe,
+        }
     else:
         raise PackageFlowError(f"unsupported target-native probe: {spec.probe}")
     after = _remote_native_sha256(ctx, binary)
@@ -1277,17 +1373,55 @@ def _record_target_native_artifact(
     package_id: str,
     version: str,
 ) -> dict[str, Any]:
-    binary = f"{staging}/{spec.relative_path}"
-    checked = _probe_remote_native_binary(
-        ctx, binary, spec, expected_version=version
+    return _record_target_native_artifacts(
+        ctx,
+        staging,
+        (spec,),
+        package_id=package_id,
+        version=version,
     )
+
+
+def _record_target_native_artifacts(
+    ctx: Context,
+    staging: str,
+    specs: tuple[TargetNativeArtifactSpec, ...],
+    *,
+    package_id: str,
+    version: str,
+) -> dict[str, Any]:
+    if not specs:
+        raise PackageFlowError("target-native package has no artifact specification")
+    artifacts = []
+    seen_paths: set[str] = set()
+    for spec in specs:
+        if spec.package_id != package_id or spec.relative_path in seen_paths:
+            raise PackageFlowError(
+                f"invalid target-native artifact set for {package_id}"
+            )
+        seen_paths.add(spec.relative_path)
+        checked = _probe_remote_native_binary(
+            ctx,
+            f"{staging}/{spec.relative_path}",
+            spec,
+            expected_version=version,
+        )
+        artifacts.append(
+            {
+                "path": spec.relative_path,
+                "sha256": checked["sha256"],
+                "probe": checked["probe"],
+            }
+        )
+    primary = artifacts[0]
     marker = {
         "schema": TARGET_NATIVE_MARKER_SCHEMA,
         "package": package_id,
         "version": version,
-        "path": spec.relative_path,
-        "sha256": checked["sha256"],
-        "probe": checked["probe"],
+        # Retain the original single-artifact fields so an old bootstrap-only
+        # marker and current marker remain wire-compatible.
+        **primary,
+        "artifacts": artifacts,
     }
     marker_text = json.dumps(
         marker, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -1302,7 +1436,13 @@ def _record_target_native_artifact(
     return marker
 
 
-def command_sync(ctx: Context, repos: list[str], *, force: bool = False) -> int:
+def command_sync(
+    ctx: Context,
+    repos: list[str],
+    *,
+    force: bool = False,
+    native_audio_manager: bool = False,
+) -> int:
     paths, missing = repo_paths(ctx.root, repos)
     if missing:
         print("missing repositories: " + ", ".join(missing), file=sys.stderr)
@@ -1325,7 +1465,12 @@ def command_sync(ctx: Context, repos: list[str], *, force: bool = False) -> int:
 
     selected_paths = []
     for path in paths:
-        if not force and remote_fingerprints.get(path.name) == fingerprints[path.name]:
+        force_native_audio = native_audio_manager and path.name == "msys-audio"
+        if (
+            not force
+            and not force_native_audio
+            and remote_fingerprints.get(path.name) == fingerprints[path.name]
+        ):
             print(f"unchanged {path.name} -> skip upload/build")
         else:
             selected_paths.append(path)
@@ -1538,6 +1683,116 @@ def command_sync(ctx: Context, repos: list[str], *, force: bool = False) -> int:
                     file=sys.stderr,
                 )
                 return build.returncode or 1
+        elif path.name == "msys-audio":
+            audio_specs = [TARGET_NATIVE_REPOSITORIES["msys-audio"]]
+            if native_audio_manager:
+                audio_specs.extend(
+                    TARGET_NATIVE_OPTIONAL_ARTIFACTS["org.msys.audio.bluez"]
+                )
+            bootstrap_spec = audio_specs[0]
+            manager_spec = audio_specs[1] if len(audio_specs) == 2 else None
+            native_audio = f"{staging}/{bootstrap_spec.relative_path}"
+            runtime_root = f"{staging}/files/runtime/aarch64"
+            runtime_inventory = f"{staging}/{bootstrap_spec.runtime_inventory_path}"
+            sdk_root = f"{ctx.remote}/msys-sdk"
+            inventory_update = """\
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+inventory_relative = sys.argv[2]
+relatives = sys.argv[3:]
+inventory = root.joinpath(*pathlib.PurePosixPath(inventory_relative).parts)
+document = json.loads(inventory.read_text(encoding="utf-8"))
+files = document.get("files")
+if not isinstance(files, list):
+    raise SystemExit("audio runtime inventory has no files list")
+entries = []
+for relative in relatives:
+    binary = root.joinpath(*pathlib.PurePosixPath(relative).parts)
+    entries.append({
+        "path": relative,
+        "size": binary.stat().st_size,
+        "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+    })
+selected = {entry["path"] for entry in entries}
+document["files"] = sorted(
+    [item for item in files if isinstance(item, dict) and item.get("path") not in selected]
+    + entries,
+    key=lambda item: item["path"],
+)
+temporary = inventory.with_name(inventory.name + ".tmp")
+temporary.write_text(json.dumps(document, indent=2) + "\\n", encoding="utf-8")
+temporary.replace(inventory)
+verified = json.loads(inventory.read_text(encoding="utf-8"))
+matches = [item for item in verified.get("files", []) if item.get("path") in selected]
+if sorted(matches, key=lambda item: item["path"]) != sorted(entries, key=lambda item: item["path"]):
+    raise SystemExit("audio runtime inventory verification failed")
+"""
+            manager_build = ""
+            if manager_spec is not None:
+                manager_audio = f"{staging}/{manager_spec.relative_path}"
+                manager_build = (
+                    f"test -f {quote_sh(sdk_root + '/include/msys/mipc.h')}; "
+                    f"test -f {quote_sh(sdk_root + '/src/mipc.c')}; "
+                    "MAKEFLAGS= MFLAGS= make -j1 -C native CC=\"$compiler\" "
+                    f"MSYS_SDK_DIR={quote_sh(sdk_root)} manager check-manager; "
+                    "MAKEFLAGS= MFLAGS= make -j1 -C native CC=\"$compiler\" "
+                    f"MSYS_SDK_DIR={quote_sh(sdk_root)} "
+                    f"DESTDIR={quote_sh(runtime_root)} install-manager; "
+                    f"test -x {quote_sh(manager_audio)}; "
+                    f"test -f {quote_sh(manager_audio)}; "
+                    f"test ! -L {quote_sh(manager_audio)}; "
+                )
+            inventory_paths = " ".join(
+                quote_sh(spec.relative_path) for spec in audio_specs
+            )
+            build = ssh_capture(
+                ctx,
+                "set -eu; "
+                f"cd {quote_sh(staging)}; "
+                "command -v make >/dev/null 2>&1; "
+                "if command -v cc >/dev/null 2>&1; then compiler=cc; "
+                "elif command -v gcc >/dev/null 2>&1; then compiler=gcc; "
+                "else echo 'native audio bootstrap build requires cc or gcc on the target' >&2; exit 127; fi; "
+                "MAKEFLAGS= MFLAGS= make -j1 -C native CC=\"$compiler\" clean; "
+                "MAKEFLAGS= MFLAGS= make -j1 -C native CC=\"$compiler\" all check; "
+                "MAKEFLAGS= MFLAGS= make -j1 -C native CC=\"$compiler\" "
+                f"DESTDIR={quote_sh(runtime_root)} install; "
+                f"test -x {quote_sh(native_audio)}; "
+                f"test -f {quote_sh(native_audio)}; "
+                f"test ! -L {quote_sh(native_audio)}; "
+                f"{quote_sh(native_audio)} --self-test >/dev/null; "
+                f"test \"$({quote_sh(native_audio)} --build-probe)\" = "
+                "'msys-hci-bootstrap 1'; "
+                + manager_build
+                +
+                f"test -f {quote_sh(runtime_inventory)}; "
+                f"{quote_sh(ctx.remote_python)} -c {quote_sh(inventory_update)} "
+                f"{quote_sh(staging)} "
+                f"{quote_sh(str(bootstrap_spec.runtime_inventory_path))} "
+                f"{inventory_paths}",
+                display_command=(
+                    "<build native audio bootstrap and opt-in manager in atomic staging tree>"
+                    if manager_spec is not None
+                    else "<build native audio bootstrap in atomic staging tree>"
+                ),
+            )
+            if build.returncode != 0:
+                if build.stdout:
+                    print(
+                        build.stdout,
+                        end="" if build.stdout.endswith("\n") else "\n",
+                        file=sys.stderr,
+                    )
+                print(
+                    "sync: native audio target build failed; the previous remote "
+                    "repository was left active",
+                    file=sys.stderr,
+                )
+                return build.returncode or 1
         elif path.name == "msys-x11-session":
             native_policy = f"{staging}/bin/msys-x11-policy"
             build = ssh_capture(
@@ -1578,13 +1833,25 @@ def command_sync(ctx: Context, repos: list[str], *, force: bool = False) -> int:
                 package_id, version, _manifest = _target_native_source_identity(
                     path, native_spec
                 )
-                _record_target_native_artifact(
-                    ctx,
-                    staging,
-                    native_spec,
-                    package_id=package_id,
-                    version=version,
-                )
+                native_specs = (native_spec,)
+                if path.name == "msys-audio" and native_audio_manager:
+                    native_specs = _target_native_package_specs(package_id)
+                if len(native_specs) == 1:
+                    _record_target_native_artifact(
+                        ctx,
+                        staging,
+                        native_specs[0],
+                        package_id=package_id,
+                        version=version,
+                    )
+                else:
+                    _record_target_native_artifacts(
+                        ctx,
+                        staging,
+                        native_specs,
+                        package_id=package_id,
+                        version=version,
+                    )
             except PackageFlowError as exc:
                 print(
                     f"sync: target-native artifact preflight failed: {exc}; "
@@ -2545,9 +2812,11 @@ def _load_target_native_marker(
         raise PackageFlowError(
             f"target-native marker has an invalid SHA-256 for {spec.package_id}"
         )
-    binary = f"{repository}/{spec.relative_path}"
     checked = _probe_remote_native_binary(
-        ctx, binary, spec, expected_version=expected_version
+        ctx,
+        f"{repository}/{spec.relative_path}",
+        spec,
+        expected_version=expected_version,
     )
     if checked["sha256"] != declared_hash or checked["probe"] != marker.get("probe"):
         raise PackageFlowError(
@@ -2556,12 +2825,222 @@ def _load_target_native_marker(
     return marker
 
 
+def _load_target_native_artifacts(
+    ctx: Context,
+    specs: tuple[TargetNativeArtifactSpec, ...],
+    *,
+    expected_version: str,
+) -> tuple[tuple[TargetNativeArtifactSpec, dict[str, Any]], ...]:
+    if not specs:
+        return ()
+    primary = specs[0]
+    if any(
+        spec.package_id != primary.package_id
+        or spec.repository != primary.repository
+        for spec in specs
+    ):
+        raise PackageFlowError("target-native artifact specifications disagree")
+    repository = f"{ctx.remote}/{primary.repository}"
+    marker_path = f"{repository}/{TARGET_NATIVE_MARKER_NAME}"
+    result = ssh_capture(
+        ctx,
+        f"test -f {quote_sh(marker_path)} && test ! -L {quote_sh(marker_path)} "
+        f"&& cat {quote_sh(marker_path)}",
+        display_command=f"<read {primary.repository} target-native marker>",
+    )
+    if result.returncode != 0:
+        raise PackageFlowError(
+            f"target-native marker is missing for {primary.package_id}; run "
+            f"msys-dev sync --repo {primary.repository} --full-sync first"
+        )
+    try:
+        marker = _decode_json_document(result.stdout)
+    except ValueError as exc:
+        raise PackageFlowError(
+            f"target-native marker is invalid for {primary.package_id}"
+        ) from exc
+    expected_fields = {
+        "schema": TARGET_NATIVE_MARKER_SCHEMA,
+        "package": primary.package_id,
+        "version": expected_version,
+    }
+    for field, expected in expected_fields.items():
+        if marker.get(field) != expected:
+            raise PackageFlowError(
+                f"target-native marker mismatch for {primary.package_id}: "
+                f"{field} expected {expected!r}, got {marker.get(field)!r}"
+            )
+    raw_artifacts = marker.get("artifacts")
+    if raw_artifacts is None:
+        raw_artifacts = [
+            {
+                "path": marker.get("path"),
+                "sha256": marker.get("sha256"),
+                "probe": marker.get("probe"),
+            }
+        ]
+    if not isinstance(raw_artifacts, list) or not raw_artifacts:
+        raise PackageFlowError(
+            f"target-native marker has no artifacts for {primary.package_id}"
+        )
+    if marker.get("artifacts") is not None:
+        first = raw_artifacts[0]
+        if not isinstance(first, dict) or any(
+            marker.get(field) != first.get(field)
+            for field in ("path", "sha256", "probe")
+        ):
+            raise PackageFlowError(
+                f"target-native marker primary fields disagree for {primary.package_id}"
+            )
+    by_path: dict[str, dict[str, Any]] = {}
+    for artifact in raw_artifacts:
+        path = artifact.get("path") if isinstance(artifact, dict) else None
+        declared_hash = artifact.get("sha256") if isinstance(artifact, dict) else None
+        if (
+            not isinstance(path, str)
+            or path in by_path
+            or not isinstance(declared_hash, str)
+            or re.fullmatch(r"[0-9a-f]{64}", declared_hash) is None
+        ):
+            raise PackageFlowError(
+                f"target-native marker has an invalid artifact for {primary.package_id}"
+            )
+        by_path[path] = artifact
+    expected_by_path = {spec.relative_path: spec for spec in specs}
+    unknown = sorted(set(by_path) - set(expected_by_path))
+    if unknown:
+        raise PackageFlowError(
+            f"target-native marker has unknown artifacts for {primary.package_id}: "
+            + ", ".join(unknown)
+        )
+    if primary.relative_path not in by_path:
+        raise PackageFlowError(
+            f"target-native marker is missing required {primary.relative_path}"
+        )
+    loaded = []
+    for spec in specs:
+        artifact = by_path.get(spec.relative_path)
+        if artifact is None:
+            continue
+        checked = _probe_remote_native_binary(
+            ctx,
+            f"{repository}/{spec.relative_path}",
+            spec,
+            expected_version=expected_version,
+        )
+        if (
+            checked["sha256"] != artifact["sha256"]
+            or checked["probe"] != artifact.get("probe")
+        ):
+            raise PackageFlowError(
+                f"target-native marker no longer matches {spec.relative_path}"
+            )
+        loaded.append((spec, artifact))
+    return tuple(loaded)
+
+
+def _update_target_native_runtime_inventory(
+    package_root: Path,
+    destination: Path,
+    spec: TargetNativeArtifactSpec,
+) -> None:
+    if spec.runtime_inventory_path is None:
+        return
+    inventory = package_root.joinpath(
+        *PurePosixPath(spec.runtime_inventory_path).parts
+    )
+    if inventory.is_symlink() or not inventory.is_file():
+        raise PackageFlowError(
+            f"native package source is missing a regular {spec.runtime_inventory_path}"
+        )
+    try:
+        document = json.loads(inventory.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PackageFlowError(
+            f"native runtime inventory is invalid for {spec.package_id}: {exc}"
+        ) from exc
+    files = document.get("files") if isinstance(document, dict) else None
+    if not isinstance(files, list):
+        raise PackageFlowError(
+            f"native runtime inventory has no files list for {spec.package_id}"
+        )
+    entry = {
+        "path": spec.relative_path,
+        "size": destination.stat().st_size,
+        "sha256": _file_sha256(destination),
+    }
+    retained = [
+        item
+        for item in files
+        if isinstance(item, dict) and item.get("path") != spec.relative_path
+    ]
+    document["files"] = sorted(
+        [*retained, entry], key=lambda item: str(item.get("path", ""))
+    )
+    inventory.write_text(
+        json.dumps(document, indent=2) + "\n", encoding="utf-8"
+    )
+    try:
+        verified = json.loads(inventory.read_text(encoding="utf-8"))
+        matches = [
+            item
+            for item in verified.get("files", [])
+            if isinstance(item, dict) and item.get("path") == spec.relative_path
+        ]
+    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError) as exc:
+        raise PackageFlowError(
+            f"cannot verify native runtime inventory for {spec.package_id}: {exc}"
+        ) from exc
+    if matches != [entry]:
+        raise PackageFlowError(
+            f"native runtime inventory verification failed for {spec.package_id}"
+        )
+
+
+def _remove_target_native_runtime_inventory_entry(
+    package_root: Path,
+    spec: TargetNativeArtifactSpec,
+) -> None:
+    if spec.runtime_inventory_path is None:
+        return
+    inventory = package_root.joinpath(
+        *PurePosixPath(spec.runtime_inventory_path).parts
+    )
+    if inventory.is_symlink() or not inventory.is_file():
+        raise PackageFlowError(
+            f"native package source is missing a regular {spec.runtime_inventory_path}"
+        )
+    try:
+        document = json.loads(inventory.read_text(encoding="utf-8"))
+        files = document.get("files") if isinstance(document, dict) else None
+        if not isinstance(files, list):
+            raise ValueError("files is not a list")
+        document["files"] = [
+            item
+            for item in files
+            if not isinstance(item, dict) or item.get("path") != spec.relative_path
+        ]
+        inventory.write_text(
+            json.dumps(document, indent=2) + "\n", encoding="utf-8"
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise PackageFlowError(
+            f"cannot prune native runtime inventory for {spec.package_id}: {exc}"
+        ) from exc
+
+
 @contextlib.contextmanager
 def _prepared_target_native_package(
     ctx: Context,
     package_dir: Path,
     manifest_path: Path | None,
-) -> Iterator[tuple[Path, Path, TargetNativeArtifactSpec | None, dict[str, Any] | None]]:
+) -> Iterator[
+    tuple[
+        Path,
+        Path,
+        tuple[tuple[TargetNativeArtifactSpec, dict[str, Any]], ...],
+    ]
+]:
     unresolved_source = package_dir.expanduser()
     if unresolved_source.is_symlink():
         raise PackageFlowError(
@@ -2571,14 +3050,19 @@ def _prepared_target_native_package(
     if not source.is_dir():
         raise PackageFlowError(f"package root is not a real directory: {source}")
     package_id, version, manifest = _package_source_identity(source, manifest_path)
-    spec = TARGET_NATIVE_ARTIFACTS.get(package_id)
-    if spec is None:
-        yield source, manifest, None, None
+    specs = _target_native_package_specs(package_id)
+    if not specs:
+        yield source, manifest, ()
         return
 
-    marker = _load_target_native_marker(ctx, spec, expected_version=version)
+    artifacts = _load_target_native_artifacts(
+        ctx, specs, expected_version=version
+    )
+    artifact_by_path = {
+        spec.relative_path: (spec, marker) for spec, marker in artifacts
+    }
     manifest_relative = manifest.relative_to(source)
-    with tempfile.TemporaryDirectory(prefix=f"msys-native-{spec.repository}-") as temporary:
+    with tempfile.TemporaryDirectory(prefix=f"msys-native-{specs[0].repository}-") as temporary:
         temporary_root = Path(temporary)
         prepared = temporary_root / source.name
         shutil.copytree(
@@ -2596,38 +3080,51 @@ def _prepared_target_native_package(
             ),
             copy_function=shutil.copy2,
         )
-        destination = prepared.joinpath(*PurePosixPath(spec.relative_path).parts)
-        if destination.is_symlink() or not destination.is_file():
-            raise PackageFlowError(
-                f"native package source is missing a regular {spec.relative_path}"
+        for spec in specs:
+            destination = prepared.joinpath(*PurePosixPath(spec.relative_path).parts)
+            if destination.is_symlink() or (
+                destination.exists() and not destination.is_file()
+            ):
+                raise PackageFlowError(
+                    f"native package source has a non-regular {spec.relative_path}"
+                )
+            selected = artifact_by_path.get(spec.relative_path)
+            if selected is None:
+                destination.unlink(missing_ok=True)
+                _remove_target_native_runtime_inventory_entry(prepared, spec)
+                continue
+            _selected_spec, marker = selected
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            downloaded = temporary_root / (
+                "target-native-" + PurePosixPath(spec.relative_path).name
             )
-        downloaded = temporary_root / "target-native.download"
-        remote_binary = f"{ctx.remote}/{spec.repository}/{spec.relative_path}"
-        try:
-            run_local(
-                [
-                    *scp_base_args(ctx),
-                    f"{ctx.target}:{remote_binary}",
-                    str(downloaded),
-                ]
-            )
-        except subprocess.CalledProcessError as exc:
-            raise PackageFlowError(
-                f"cannot recover target-native ELF for {spec.package_id}"
-            ) from exc
-        if downloaded.is_symlink() or not downloaded.is_file():
-            raise PackageFlowError(
-                f"target-native download is not a regular file for {spec.package_id}"
-            )
-        actual = _file_sha256(downloaded)
-        if actual != marker["sha256"]:
-            raise PackageFlowError(
-                f"target-native ELF changed during download for {spec.package_id}: "
-                f"expected {marker['sha256']}, got {actual}"
-            )
-        downloaded.chmod(downloaded.stat().st_mode | 0o111)
-        os.replace(downloaded, destination)
-        yield prepared, prepared / manifest_relative, spec, marker
+            remote_binary = f"{ctx.remote}/{spec.repository}/{spec.relative_path}"
+            try:
+                run_local(
+                    [
+                        *scp_base_args(ctx),
+                        f"{ctx.target}:{remote_binary}",
+                        str(downloaded),
+                    ]
+                )
+            except subprocess.CalledProcessError as exc:
+                raise PackageFlowError(
+                    f"cannot recover target-native ELF {spec.relative_path}"
+                ) from exc
+            if downloaded.is_symlink() or not downloaded.is_file():
+                raise PackageFlowError(
+                    f"target-native download is not a regular file: {spec.relative_path}"
+                )
+            actual = _file_sha256(downloaded)
+            if actual != marker["sha256"]:
+                raise PackageFlowError(
+                    f"target-native ELF changed during download: {spec.relative_path}; "
+                    f"expected {marker['sha256']}, got {actual}"
+                )
+            downloaded.chmod(downloaded.stat().st_mode | 0o111)
+            os.replace(downloaded, destination)
+            _update_target_native_runtime_inventory(prepared, destination, spec)
+        yield prepared, prepared / manifest_relative, artifacts
 
 
 def _archive_member_sha256(archive_path: Path, relative_path: str) -> str:
@@ -2660,6 +3157,36 @@ def _archive_member_sha256(archive_path: Path, relative_path: str) -> str:
         ) from exc
 
 
+def _archive_content_hash(archive_path: Path, relative_path: str) -> str:
+    wanted = PurePosixPath(relative_path).as_posix()
+    try:
+        with tarfile.open(archive_path, "r:*") as archive:
+            matches = [
+                member
+                for member in archive.getmembers()
+                if member.name.removeprefix("./") == "hashes.json"
+            ]
+            if len(matches) != 1 or not matches[0].isfile():
+                raise PackageFlowError(
+                    "built package must contain one regular hashes.json"
+                )
+            handle = archive.extractfile(matches[0])
+            if handle is None:
+                raise PackageFlowError("cannot read built package hashes.json")
+            document = json.loads(handle.read().decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, tarfile.TarError) as exc:
+        raise PackageFlowError(
+            f"cannot inspect built package content hashes {archive_path}: {exc}"
+        ) from exc
+    files = document.get("files") if isinstance(document, dict) else None
+    declared = files.get(wanted) if isinstance(files, dict) else None
+    if not isinstance(declared, str) or re.fullmatch(r"[0-9a-f]{64}", declared) is None:
+        raise PackageFlowError(
+            f"built package content hashes do not cover target-native {wanted}"
+        )
+    return declared
+
+
 def command_package_deliver(
     ctx: Context,
     workspace: Path,
@@ -2677,7 +3204,7 @@ def command_package_deliver(
 ) -> int:
     with _prepared_target_native_package(
         ctx, package_dir, manifest_path
-    ) as (prepared, prepared_manifest, native_spec, marker):
+    ) as (prepared, prepared_manifest, native_artifacts):
         result = build_package(
             workspace,
             prepared,
@@ -2688,21 +3215,37 @@ def command_package_deliver(
             artifact_format=artifact_format,
             overlays=overlays,
         )
-        if native_spec is not None:
-            assert marker is not None
-            packaged_hash = _archive_member_sha256(
-                Path(result["artifact"]), native_spec.relative_path
-            )
-            if packaged_hash != marker["sha256"]:
-                raise PackageFlowError(
-                    f"built package did not retain the verified target-native ELF for "
-                    f"{native_spec.package_id}"
+        if native_artifacts:
+            verified_artifacts = []
+            for native_spec, marker in native_artifacts:
+                packaged_hash = _archive_member_sha256(
+                    Path(result["artifact"]), native_spec.relative_path
                 )
+                content_hash = _archive_content_hash(
+                    Path(result["artifact"]), native_spec.relative_path
+                )
+                if (
+                    packaged_hash != marker["sha256"]
+                    or content_hash != marker["sha256"]
+                ):
+                    raise PackageFlowError(
+                        "built package did not retain and content-hash the verified "
+                        f"target-native ELF {native_spec.relative_path}"
+                    )
+                verified_artifacts.append(
+                    {
+                        "path": native_spec.relative_path,
+                        "sha256": marker["sha256"],
+                        "probe": marker["probe"],
+                    }
+                )
+            primary_spec, primary_marker = native_artifacts[0]
             result["target_native"] = {
-                "repository": native_spec.repository,
-                "path": native_spec.relative_path,
-                "sha256": marker["sha256"],
-                "probe": marker["probe"],
+                "repository": primary_spec.repository,
+                "path": primary_spec.relative_path,
+                "sha256": primary_marker["sha256"],
+                "probe": primary_marker["probe"],
+                "artifacts": verified_artifacts,
             }
         print_json(result)
         return command_install_archive(
@@ -3560,6 +4103,7 @@ def command_fast_report(
     timeout: float,
     force: bool,
     json_output: bool = False,
+    audio: bool = False,
 ) -> int:
     """Fetch health, logs, and an optional PNG through one SSH execution.
 
@@ -3647,15 +4191,88 @@ def command_fast_report(
         ),
     ]
     members = ["meta.json", "status.txt", "components.json", "system.txt"]
+    commands.append("audio=0")
+    if audio:
+        audio_argv = [
+            ctx.remote_python,
+            "-m",
+            "msys_tools.remote_ctl",
+            "--runtime-dir",
+            runtime_dir,
+            "--target",
+            "role:audio-manager",
+            "--method",
+            "get_state",
+            "--payload",
+            "{}",
+            "--response-only",
+            "--timeout",
+            "10",
+            "--idempotent",
+        ]
+        commands.extend(
+            [
+                (
+                    f"PYTHONDONTWRITEBYTECODE=1 PYTHONPATH={quote_sh(ctx.remote + '/msys-tools')} "
+                    + " ".join(quote_sh(value) for value in audio_argv)
+                    + ' >"$work/audio.json" 2>&1 || audio=$?'
+                ),
+                (
+                    "LC_ALL=C ps -ww -eo pid=,ppid=,rss=,vsz=,stat=,comm=,args= "
+                    "2>/dev/null | awk 'index($7, \"/org.msys.audio.bluez/\") "
+                    "|| ($6 ~ /^python/ && index($8, \"/org.msys.audio.bluez/\")) "
+                    "{print}' "
+                    '>"$work/audio-processes.txt" || true'
+                ),
+                (
+                    "while read -r pid rest; do "
+                    "test -r \"/proc/$pid/smaps_rollup\" || continue; "
+                    "pss=$(awk '$1 == \"Pss:\" {print $2; exit}' "
+                    "\"/proc/$pid/smaps_rollup\" 2>/dev/null); "
+                    "case \"$pss\" in ''|*[!0-9]*) continue;; esac; "
+                    "printf '%s %s\\n' \"$pid\" \"$pss\"; "
+                    "done <\"$work/audio-processes.txt\" "
+                    '>"$work/audio-memory.txt" || true'
+                ),
+                (
+                    "LC_ALL=C ps -ww -eo pid=,ppid=,stat=,comm=,args= "
+                    "2>/dev/null | awk '$4 == \"bluetoothd\" "
+                    "&& index($5, \"/org.msys.audio.bluez/\") == 0 {print}' "
+                    '>"$work/audio-host-conflicts.txt" || true'
+                ),
+            ]
+        )
+        members.extend(
+            [
+                "audio.json",
+                "audio-processes.txt",
+                "audio-memory.txt",
+                "audio-host-conflicts.txt",
+            ]
+        )
     if lines:
         commands.append(
             f"tail -n 500 {quote_sh(log_file)} 2>/dev/null | "
-            "awk 'tolower($0) ~ /error|warning|failed|failure|oom|quarantine|exited|traceback/ "
+            "awk '$0 ~ /^msysd: public control socket([[:space:]]|$)/ "
+            "{n=0; next} "
+            "tolower($0) ~ /error|warning|failed|failure|oom|quarantine|exited|traceback/ "
             "{lines[++n]=$0} "
             f"END {{start=n-{lines}+1; if (start<1) start=1; for (i=start;i<=n;i++) print lines[i]}}' "
             ">\"$work/log.txt\" || true"
         )
         members.append("log.txt")
+        if audio:
+            commands.append(
+                f"tail -n 1000 {quote_sh(log_file)} 2>/dev/null | "
+                "awk '$0 ~ /^msysd: public control socket([[:space:]]|$)/ "
+                "{n=0; next} "
+                "tolower($0) ~ /msys-audio|audio-manager|bluez|bluealsa|"
+                "bluetoothd|squeezelite/ {lines[++n]=$0} "
+                f"END {{start=n-{lines}+1; if (start<1) start=1; "
+                "for (i=start;i<=n;i++) print lines[i]}' "
+                '>"$work/audio-log.txt" || true'
+            )
+            members.append("audio-log.txt")
     commands.append("shot=0")
     if screenshot is not None:
         screenshot_argv = [
@@ -3685,17 +4302,26 @@ def command_fast_report(
             ]
         )
         members.extend(["screenshot.json", "screenshot.png"])
+    metadata = (
+        "printf '{\"schema\":\"msys.fast-report.v1\","
+        "\"health_status\":%s,\"screenshot_status\":%s,"
+        "\"audio_status\":%s}\\n' "
+        '"$health" "$shot" "$audio" >"$work/meta.json"'
+        if audio
+        else (
+            "printf '{\"schema\":\"msys.fast-report.v1\","
+            "\"health_status\":%s,\"screenshot_status\":%s}\\n' "
+            '"$health" "$shot" >"$work/meta.json"'
+        )
+    )
     commands.extend(
         [
-            (
-                "printf '{\"schema\":\"msys.fast-report.v1\","
-                "\"health_status\":%s,\"screenshot_status\":%s}\\n' "
-                '"$health" "$shot" >"$work/meta.json"'
-            ),
+            metadata,
             "tar -cf - -C \"$work\" " + " ".join(quote_sh(name) for name in members),
             "archive=$?",
             'if test "$archive" -ne 0; then exit "$archive"; fi',
             'if test "$health" -ne 0; then exit "$health"; fi',
+            'if test "$audio" -ne 0; then exit "$audio"; fi',
             'exit "$shot"',
         ]
     )
@@ -3717,6 +4343,7 @@ def command_fast_report(
                 raise ValueError("fast report metadata has an invalid schema")
             health_status = meta.get("health_status")
             screenshot_status = meta.get("screenshot_status")
+            audio_status = meta.get("audio_status", 0)
             if (
                 isinstance(health_status, bool)
                 or not isinstance(health_status, int)
@@ -3724,6 +4351,9 @@ def command_fast_report(
                 or isinstance(screenshot_status, bool)
                 or not isinstance(screenshot_status, int)
                 or not 0 <= screenshot_status <= 255
+                or isinstance(audio_status, bool)
+                or not isinstance(audio_status, int)
+                or not 0 <= audio_status <= 255
             ):
                 raise ValueError("fast report metadata has invalid status values")
             status_text = _fast_report_member(
@@ -3798,6 +4428,113 @@ def command_fast_report(
                 },
                 "recent_warnings_errors": log_lines,
             }
+
+            if audio:
+                audio_text = _fast_report_member(
+                    archive, "audio.json", maximum=2 * 1024 * 1024
+                ).decode("utf-8", errors="replace")
+                audio_response = _decode_json_document(audio_text)
+                if audio_status == 0:
+                    audio_payload = audio_response.get("payload")
+                    if (
+                        audio_response.get("type") != "return"
+                        or not isinstance(audio_payload, dict)
+                    ):
+                        raise ValueError("audio role returned an invalid get_state response")
+                else:
+                    audio_payload = None
+                audio_components = []
+                for item in raw_components:
+                    if not isinstance(item, dict):
+                        continue
+                    provided = item.get("provides")
+                    has_audio_role = isinstance(provided, list) and any(
+                        isinstance(entry, dict)
+                        and entry.get("kind") == "role"
+                        and entry.get("name") == "audio-manager"
+                        for entry in provided
+                    )
+                    if item.get("id") == "org.msys.audio.bluez:audio-manager" or has_audio_role:
+                        audio_components.append(item)
+                process_text = _fast_report_member(
+                    archive, "audio-processes.txt", maximum=1024 * 1024
+                ).decode("utf-8", errors="replace")
+                memory_text = _fast_report_member(
+                    archive, "audio-memory.txt", maximum=64 * 1024
+                ).decode("utf-8", errors="replace")
+                host_conflict_lines = [
+                    line
+                    for line in _fast_report_member(
+                        archive, "audio-host-conflicts.txt", maximum=64 * 1024
+                    ).decode("utf-8", errors="replace").splitlines()
+                    if line.strip()
+                ]
+                pss_by_pid: dict[int, int] = {}
+                for line in memory_text.splitlines():
+                    fields = line.split()
+                    if len(fields) != 2:
+                        continue
+                    try:
+                        pid_value, pss_value = int(fields[0]), int(fields[1])
+                    except ValueError:
+                        continue
+                    if pid_value > 0 and pss_value >= 0:
+                        pss_by_pid[pid_value] = pss_value
+                audio_log_lines: list[str] = []
+                if lines:
+                    audio_log_lines = _fast_report_member(
+                        archive, "audio-log.txt", maximum=8 * 1024 * 1024
+                    ).decode("utf-8", errors="replace").splitlines()
+                audio_processes = []
+                for line in process_text.splitlines():
+                    fields = line.strip().split(None, 6)
+                    if len(fields) < 6:
+                        continue
+                    arguments = fields[6] if len(fields) == 7 else ""
+                    # The target-side ps predicate is authoritative. Keep this
+                    # identical local check as a compatibility fence for an old
+                    # helper/report so a host dbus-daemon can never inflate RSS.
+                    if "/org.msys.audio.bluez/" not in arguments:
+                        continue
+                    try:
+                        pid, ppid, rss_kib, vsz_kib = (
+                            int(fields[0]),
+                            int(fields[1]),
+                            int(fields[2]),
+                            int(fields[3]),
+                        )
+                    except ValueError:
+                        continue
+                    audio_processes.append(
+                        {
+                            "pid": pid,
+                            "ppid": ppid,
+                            "rss_kib": rss_kib,
+                            "pss_kib": pss_by_pid.get(pid),
+                            "vsz_kib": vsz_kib,
+                            "state": fields[4],
+                            "command": fields[5],
+                            "args": arguments,
+                        }
+                    )
+                report["audio"] = {
+                    "registered": audio_status == 0,
+                    "status": audio_status,
+                    "components": audio_components,
+                    "state": audio_payload,
+                    "error": audio_response if audio_status != 0 else None,
+                    "processes": audio_processes,
+                    "host_conflicts": host_conflict_lines,
+                    "recent_log": audio_log_lines,
+                    "rss_total_kib": sum(
+                        item["rss_kib"] for item in audio_processes
+                    ),
+                    "pss_total_kib": sum(
+                        item["pss_kib"]
+                        for item in audio_processes
+                        if isinstance(item["pss_kib"], int)
+                    ),
+                }
 
             if screenshot is not None:
                 capture_text = _fast_report_member(
@@ -3882,6 +4619,50 @@ def command_fast_report(
                     print("recent warnings/errors:")
                     for line in log_lines:
                         print(f"  {line}")
+                if audio:
+                    audio_summary = report["audio"]
+                    state = audio_summary["state"] or {}
+                    component = next(iter(audio_summary["components"]), {})
+                    print(
+                        "audio: "
+                        f"registered={str(audio_summary['registered']).lower()} "
+                        f"component={component.get('id', '-')} "
+                        f"state={component.get('state', '-')} "
+                        f"backend={state.get('backend', '-')} "
+                        f"available={str(state.get('available') is True).lower()} "
+                        f"reason={state.get('reason') or '-'}"
+                    )
+                    if audio_summary["error"] is not None:
+                        error = audio_summary["error"]
+                        print(
+                            "audio error: "
+                            f"{error.get('code', 'AUDIO_ROLE_UNAVAILABLE')}: "
+                            f"{error.get('message', audio_text.strip())}"
+                        )
+                    if audio_summary["host_conflicts"]:
+                        print(
+                            "audio host conflicts: "
+                            f"count={len(audio_summary['host_conflicts'])}"
+                        )
+                        for line in audio_summary["host_conflicts"]:
+                            print(f"  {line}")
+                    print(
+                        "audio processes: "
+                        f"count={len(audio_summary['processes'])} "
+                        f"rss_total={audio_summary['rss_total_kib']}KiB "
+                        f"pss_total={audio_summary['pss_total_kib']}KiB"
+                    )
+                    for process in audio_summary["processes"]:
+                        pss = process["pss_kib"]
+                        print(
+                            f"  pid={process['pid']} rss={process['rss_kib']}KiB "
+                            f"pss={str(pss) + 'KiB' if pss is not None else '-'} "
+                            f"state={process['state']} command={process['command']}"
+                        )
+                    if audio_summary["recent_log"]:
+                        print("audio recent log:")
+                        for line in audio_summary["recent_log"]:
+                            print(f"  {line}")
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError, tarfile.TarError) as exc:
         remote_error = completed.stderr.decode("utf-8", errors="replace").strip()
         print(f"fast: invalid diagnostic bundle: {exc}", file=sys.stderr)
@@ -3889,9 +4670,9 @@ def command_fast_report(
             print(remote_error, file=sys.stderr)
         return completed.returncode or 2
 
-    if completed.returncode not in {health_status, screenshot_status, 0}:
+    if completed.returncode not in {health_status, screenshot_status, audio_status, 0}:
         return completed.returncode or 1
-    return health_status or screenshot_status
+    return health_status or audio_status or screenshot_status
 
 
 def command_fast(
@@ -3914,11 +4695,19 @@ def command_fast(
     full_sync: bool,
     json_output: bool = False,
     overlays: list[Any] | None = None,
+    audio: bool = False,
+    native_audio_manager: bool = False,
 ) -> int:
     """Fast edit loop: sync only required sources, then deliver/run and report."""
 
     if deliver and not repos:
         print("fast: --deliver requires at least one --repo", file=sys.stderr)
+        return 2
+    if native_audio_manager and "msys-audio" not in repos:
+        print(
+            "fast: --native-audio-manager requires --repo msys-audio",
+            file=sys.stderr,
+        )
         return 2
     if deliver and overlays and len(repos) != 1:
         print(
@@ -3964,7 +4753,10 @@ def command_fast(
                 + " (use --full-sync to update remote development sources too)"
             )
     if sync_repositories:
-        status = command_sync(ctx, sync_repositories, force=full_sync)
+        sync_options: dict[str, Any] = {"force": full_sync}
+        if native_audio_manager:
+            sync_options["native_audio_manager"] = True
+        status = command_sync(ctx, sync_repositories, **sync_options)
         if status != 0:
             return status
     elif not repos:
@@ -4046,7 +4838,105 @@ def command_fast(
         timeout=timeout,
         force=force,
         json_output=json_output,
+        audio=audio,
     )
+
+
+def command_storage(
+    ctx: Context,
+    dev_root: str,
+    state_dir: str,
+    release_root: str,
+    usb_root: str,
+    *,
+    apply: bool,
+    no_archive: bool,
+    json_output: bool,
+    log_file: str = "/tmp/msysd.log",
+) -> int:
+    """Run one read-only plan or USB-backed cleanup transaction over one SSH."""
+
+    if no_archive and not apply:
+        print("storage: --no-archive requires explicit --apply", file=sys.stderr)
+        return 2
+    argv = [
+        ctx.remote_python,
+        "-m",
+        "msys_tools.remote_storage",
+        "--dev-root",
+        dev_root,
+        "--state-dir",
+        state_dir,
+        "--release-root",
+        release_root,
+        "--usb-root",
+        usb_root,
+        "--log-file",
+        log_file,
+    ]
+    if apply:
+        argv.append("--apply")
+    if no_archive:
+        argv.append("--no-archive")
+    command = (
+        "PYTHONDONTWRITEBYTECODE=1 "
+        f"PYTHONPATH={quote_sh(ctx.remote + '/msys-tools:/opt/msys/current/msys-tools')} "
+        + " ".join(quote_sh(value) for value in argv)
+    )
+    completed = ssh_capture(ctx, command, display_command="<one-pass storage plan/offload>")
+    try:
+        document = _decode_json_document(completed.stdout)
+    except ValueError as exc:
+        print(f"storage: invalid remote report: {exc}", file=sys.stderr)
+        if completed.stderr:
+            print(completed.stderr, file=sys.stderr, end="" if completed.stderr.endswith("\n") else "\n")
+        return completed.returncode or 2
+    if document.get("schema") != "msys.storage-report.v1":
+        print("storage: remote report has an invalid schema", file=sys.stderr)
+        return completed.returncode or 2
+    if json_output:
+        print_json(document)
+    elif document.get("ok") is False:
+        print(f"storage: failed: {document.get('error', 'unknown remote error')}")
+    else:
+        print(
+            f"storage: mode={document.get('mode', 'unknown')} "
+            f"candidates={document.get('candidate_count', 0)} "
+            f"reclaimable={document.get('reclaimable_bytes', 0)}B"
+        )
+        root_fs = document.get("filesystems", {}).get("root", {})
+        usb = document.get("usb", {})
+        print(
+            "space: "
+            f"root_free={root_fs.get('free_bytes', '?')}B "
+            f"usb_mounted={str(usb.get('mounted') is True).lower()} "
+            f"usb_free={usb.get('free_bytes', '?')}B"
+        )
+        package_versions = document.get("package_versions", [])
+        release_items = document.get("releases", {}).get("items", [])
+        print(
+            "inventory (read-only): "
+            f"package_versions={len(package_versions) if isinstance(package_versions, list) else 0} "
+            f"package_bytes={document.get('package_version_bytes', 0)}B "
+            f"releases={len(release_items) if isinstance(release_items, list) else 0}"
+        )
+        for item in document.get("candidates", []):
+            if isinstance(item, dict):
+                print(
+                    f"  {item.get('kind', 'unknown')} "
+                    f"{item.get('allocated_bytes', 0)}B {item.get('path', '')}"
+                )
+        archive = document.get("archive")
+        if isinstance(archive, dict):
+            print(
+                f"archive: {archive.get('path')} sha256={archive.get('archive_sha256')}"
+            )
+        if document.get("archive_skipped") is True:
+            print("archive: explicitly skipped by --no-archive")
+        for issue in document.get("issues", []):
+            if isinstance(issue, dict):
+                print(f"warning: {issue.get('code', 'STORAGE')}: {issue.get('message', '')}")
+    return completed.returncode or (2 if document.get("ok") is False else 0)
 
 
 def command_quick(
@@ -4064,6 +4954,7 @@ def command_quick(
     timeout: float,
     force: bool,
     full_sync: bool = False,
+    native_audio_manager: bool = False,
 ) -> int:
     """Compose the common edit/deploy loop without adding another service."""
 
@@ -4073,7 +4964,12 @@ def command_quick(
         if status != 0:
             return status
 
-    status = command_sync(ctx, repos, force=True) if full_sync else command_sync(ctx, repos)
+    sync_options: dict[str, Any] = {}
+    if full_sync:
+        sync_options["force"] = True
+    if native_audio_manager:
+        sync_options["native_audio_manager"] = True
+    status = command_sync(ctx, repos, **sync_options)
     if status != 0:
         return status
 
@@ -5226,6 +6122,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="upload/rebuild even when the remote source fingerprint matches",
     )
+    sync.add_argument(
+        "--native-audio-manager",
+        action="store_true",
+        help=(
+            "opt in to target-building the candidate audio manager with the "
+            "already-synchronized remote msys-sdk"
+        ),
+    )
 
     quick = sub.add_parser(
         "quick",
@@ -5239,6 +6143,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="upload/rebuild even when the remote source fingerprint matches",
     )
+    quick.add_argument("--native-audio-manager", action="store_true")
     quick.add_argument(
         "--safe",
         action="store_true",
@@ -5285,6 +6190,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fast.add_argument("--repo", action="append", dest="repos")
     fast.add_argument("--full-sync", action="store_true")
+    fast.add_argument(
+        "--native-audio-manager",
+        action="store_true",
+        help=(
+            "opt in to target-building and delivering the candidate native audio "
+            "manager; the default audio flow remains bootstrap-only"
+        ),
+    )
     fast.add_argument("--safe", action="store_true")
     fast.add_argument("--profile")
     fast.add_argument("--runtime-dir")
@@ -5334,6 +6247,74 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="emit the bounded structured summary instead of concise text",
     )
+    fast.add_argument(
+        "--audio",
+        action="store_true",
+        help=(
+            "include audio-manager role state and private BlueZ/BlueALSA process RSS "
+            "in the same one-SSH report"
+        ),
+    )
+
+    audio_debug = sub.add_parser(
+        "audio-debug",
+        aliases=["audio-accept"],
+        parents=[common],
+        help=(
+            "read-only one-SSH audio acceptance: release, component, role state, "
+            "stack RSS, logs, and optional screenshot"
+        ),
+    )
+    audio_debug.add_argument("--runtime-dir")
+    audio_debug.add_argument("--log-file")
+    audio_debug.add_argument(
+        "--logs",
+        type=int,
+        default=80,
+        metavar="LINES",
+        help="maximum recent warning/error lines in the bundle (default: 80)",
+    )
+    audio_debug.add_argument("--no-logs", action="store_const", const=0, dest="logs")
+    audio_debug.add_argument("--screenshot", nargs="?", const="", metavar="PATH")
+    audio_debug.add_argument("--display")
+    audio_debug.add_argument(
+        "--backend", choices=["auto", "scrot", "ffmpeg"], default="auto"
+    )
+    audio_debug.add_argument(
+        "--timeout", type=_bounded_timeout, default=DEFAULT_RUN_TIMEOUT
+    )
+    audio_debug.add_argument("--force", action="store_true")
+    audio_debug.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the bounded structured summary instead of concise text",
+    )
+
+    storage = sub.add_parser(
+        "storage",
+        aliases=["storage-clean"],
+        parents=[common],
+        help=(
+            "inventory disk/USB/reclaimable data in one SSH; --apply archives to "
+            "USB and verifies SHA-256 before deleting strict whitelist candidates"
+        ),
+    )
+    storage.add_argument("--dev-root")
+    storage.add_argument("--state-dir")
+    storage.add_argument("--release-root", default=DEFAULT_SYSTEM_RELEASE_ROOT)
+    storage.add_argument("--usb-root", default="/mnt/msys-usb")
+    storage.add_argument("--log-file")
+    storage.add_argument(
+        "--apply",
+        action="store_true",
+        help="apply the reported whitelist cleanup after a verified USB archive",
+    )
+    storage.add_argument(
+        "--no-archive",
+        action="store_true",
+        help="with --apply only, explicitly delete without creating a USB archive",
+    )
+    storage.add_argument("--json", action="store_true")
 
     accept = sub.add_parser(
         "accept",
@@ -6142,6 +7123,7 @@ def main(argv: list[str] | None = None) -> int:
             ctx,
             selected_sync_repositories(args.repos, config),
             force=args.full_sync,
+            native_audio_manager=args.native_audio_manager,
         )
     if args.command in {"quick", "deploy"}:
         return command_quick(
@@ -6164,6 +7146,11 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             force=args.force,
             full_sync=args.full_sync,
+            **(
+                {"native_audio_manager": True}
+                if args.native_audio_manager
+                else {}
+            ),
         )
     if args.command in {"fast", "q"}:
         # A bare fast/q is a cheap diagnostic.  The Windows wrapper and the
@@ -6204,6 +7191,59 @@ def main(argv: list[str] | None = None) -> int:
             full_sync=args.full_sync,
             json_output=args.json,
             overlays=fast_overlays,
+            audio=args.audio,
+            **(
+                {"native_audio_manager": True}
+                if args.native_audio_manager
+                else {}
+            ),
+        )
+    if args.command in {"audio-debug", "audio-accept"}:
+        return command_fast_report(
+            ctx,
+            str(args.runtime_dir or config.get("runtime_dir", "/run/msys/main")),
+            str(args.log_file or config.get("log_file", "/tmp/msysd.log")),
+            lines=args.logs,
+            screenshot=(
+                screenshot_output(args.screenshot)
+                if args.screenshot is not None
+                else None
+            ),
+            display=args.display,
+            backend=args.backend,
+            timeout=args.timeout,
+            force=args.force,
+            json_output=args.json,
+            audio=True,
+        )
+    if args.command in {"storage", "storage-clean"}:
+        if args.no_archive and not args.apply:
+            parser.error("storage --no-archive requires explicit --apply")
+        try:
+            storage_dev_root = _normalise_remote_source_root(
+                str(args.dev_root or remote)
+            )
+            storage_state_dir = _normalise_remote_source_root(
+                str(args.state_dir or config.get("state_dir", "/opt/msys-state"))
+            )
+            storage_release_root = _normalise_remote_release_root(args.release_root)
+            storage_usb_root = _normalise_remote_source_root(args.usb_root)
+            storage_log_file = _normalise_remote_source_root(
+                str(args.log_file or config.get("log_file", "/tmp/msysd.log"))
+            )
+        except ValueError as exc:
+            print(f"storage: {exc}", file=sys.stderr)
+            return 2
+        return command_storage(
+            ctx,
+            storage_dev_root,
+            storage_state_dir,
+            storage_release_root,
+            storage_usb_root,
+            apply=args.apply,
+            no_archive=args.no_archive,
+            json_output=args.json,
+            log_file=storage_log_file,
         )
     if args.command == "accept":
         return run_acceptance(

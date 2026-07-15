@@ -186,6 +186,28 @@ class WindowsShortcutFilesTests(unittest.TestCase):
         self.assertIn('$cliArgs = @("accept") + $translatedArgs', source)
         self.assertIn('$fastBrokerDefault = $true', source)
 
+    def test_audio_debug_shortcuts_use_broker_and_one_canonical_command(self) -> None:
+        source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(
+            encoding="utf-8"
+        )
+        branch = source.split(
+            '{ $_ -in @("audio-debug", "audio-accept") } {', maxsplit=1
+        )[1].split("    }", maxsplit=1)[0]
+
+        self.assertIn('$fastBrokerDefault = $true', branch)
+        self.assertIn('$cliArgs = @("audio-debug") + $translatedArgs', branch)
+
+    def test_storage_shortcuts_use_broker_and_one_canonical_command(self) -> None:
+        source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(
+            encoding="utf-8"
+        )
+        branch = source.split(
+            '{ $_ -in @("storage", "storage-clean") } {', maxsplit=1
+        )[1].split("    }", maxsplit=1)[0]
+
+        self.assertIn('$fastBrokerDefault = $true', branch)
+        self.assertIn('$cliArgs = @("storage") + $translatedArgs', branch)
+
     def test_ui_accept_shortcut_uses_the_broker_and_one_canonical_command(self) -> None:
         source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(
             encoding="utf-8"

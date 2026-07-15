@@ -27,15 +27,21 @@ class FastWorkflowTests(unittest.TestCase):
         )
 
     @staticmethod
-    def report_archive(*, screenshot: bytes | None = None) -> bytes:
+    def report_archive(
+        *,
+        screenshot: bytes | None = None,
+        audio: bool = False,
+        audio_status: int = 0,
+    ) -> bytes:
+        metadata = {
+            "schema": "msys.fast-report.v1",
+            "health_status": 0,
+            "screenshot_status": 0,
+        }
+        if audio:
+            metadata["audio_status"] = audio_status
         members = {
-            "meta.json": json.dumps(
-                {
-                    "schema": "msys.fast-report.v1",
-                    "health_status": 0,
-                    "screenshot_status": 0,
-                }
-            ).encode(),
+            "meta.json": json.dumps(metadata).encode(),
             "status.txt": json.dumps(
                 {
                     "schema": "msys.runtime-status.v1",
@@ -81,6 +87,69 @@ class FastWorkflowTests(unittest.TestCase):
                 }
             ).encode()
             members["screenshot.png"] = screenshot
+        if audio:
+            components = json.loads(members["components.json"])
+            components["payload"]["components"].append(
+                {
+                    "id": "org.msys.audio.bluez:audio-manager",
+                    "state": "ready",
+                    "package_version": "0.1.0",
+                    "provides": [
+                        {
+                            "kind": "role",
+                            "name": "audio-manager",
+                            "exclusive": True,
+                            "priority": 100,
+                        }
+                    ],
+                }
+            )
+            members["components.json"] = json.dumps(components).encode()
+            if audio_status:
+                audio_document = {
+                    "type": "error",
+                    "id": 1,
+                    "code": "ROLE_UNAVAILABLE",
+                    "message": "no provider selected for role audio-manager",
+                }
+            else:
+                audio_document = {
+                    "type": "return",
+                    "id": 1,
+                    "payload": {
+                        "schema": "msys.audio-state.v1",
+                        "backend": "bluealsa",
+                        "available": False,
+                        "reason": "controller-not-registered",
+                        "stack": [
+                            {
+                                "name": "bluetoothd",
+                                "pid": 41,
+                                "running": True,
+                                "returncode": None,
+                            }
+                        ],
+                        "outputs": [],
+                    },
+                }
+            members["audio.json"] = json.dumps(audio_document).encode()
+            members["audio-processes.txt"] = (
+                b"268 1 6500 18000 S dbus-daemon /usr/bin/dbus-daemon --system\n"
+                b"41 20 3720 12600 S bluetoothd "
+                b"/opt/msys-state/packages/org.msys.audio.bluez/versions/0.1.5/"
+                b"files/runtime/aarch64/bin/bluetoothd -n\n"
+                b"42 20 2480 9800 S bluealsa "
+                b"/opt/msys-state/packages/org.msys.audio.bluez/versions/0.1.5/"
+                b"files/runtime/aarch64/bin/bluealsa\n"
+                b"43 20 1000 8000 S squeezelite "
+                b"/opt/msys-state/packages/org.msys.audio.bluez/versions/0.1.5/"
+                b"files/runtime/aarch64/bin/squeezelite -n MSYS\n"
+            )
+            members["audio-memory.txt"] = b"41 1800\n42 1300\n43 700\n"
+            members["audio-host-conflicts.txt"] = (
+                b"13762 1 S bluetoothd /usr/libexec/bluetooth/bluetoothd\n"
+            )
+            members["audio-log.txt"] = b"msys-audio: private stack started\n"
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w") as archive:
             for name, data in members.items():
@@ -214,6 +283,108 @@ class FastWorkflowTests(unittest.TestCase):
             ordinary_ssh.assert_not_called()
             local_transport.assert_not_called()
 
+    def test_audio_report_fetches_role_state_process_rss_and_log_in_one_ssh(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["ssh"], 0, stdout=self.report_archive(audio=True), stderr=b""
+        )
+        output = io.StringIO()
+        with (
+            mock.patch.object(dev, "ssh_capture_bytes", return_value=completed) as ssh,
+            redirect_stdout(output),
+        ):
+            result = dev.command_fast_report(
+                self.context(),
+                "/tmp/msys-main",
+                "/tmp/msysd.log",
+                lines=80,
+                screenshot=None,
+                display=None,
+                backend="auto",
+                timeout=45,
+                force=False,
+                audio=True,
+            )
+
+        self.assertEqual(result, 0)
+        ssh.assert_called_once()
+        command = ssh.call_args.args[1]
+        self.assertIn("role:audio-manager", command)
+        self.assertIn("get_state", command)
+        self.assertIn("audio-processes.txt", command)
+        self.assertIn("audio-memory.txt", command)
+        self.assertIn("audio-host-conflicts.txt", command)
+        self.assertIn('index($7, "/org.msys.audio.bluez/")', command)
+        self.assertIn("msys-audio|audio-manager|bluez|bluealsa", command)
+        self.assertIn("public control socket", command)
+        self.assertIn("{n=0; next}", command)
+        text = output.getvalue()
+        self.assertIn("current_release=r1", text)
+        self.assertIn("component=org.msys.audio.bluez:audio-manager", text)
+        self.assertIn("backend=bluealsa", text)
+        self.assertIn("reason=controller-not-registered", text)
+        self.assertIn("rss_total=7200KiB", text)
+        self.assertIn("pss_total=3800KiB", text)
+        self.assertIn("audio host conflicts: count=1", text)
+        self.assertIn("/usr/libexec/bluetooth/bluetoothd", text)
+        self.assertNotIn("pid=268", text)
+        self.assertIn("command=squeezelite", text)
+        self.assertIn("private stack started", text)
+
+    def test_audio_debug_cli_is_read_only_and_routes_to_one_pass_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                mock.patch.dict(os.environ, {"MSYS_DEV_TARGET": "root@device"}),
+                mock.patch.object(dev, "CONFIG_PATH", root / "missing.json"),
+                mock.patch.object(dev, "command_fast_report", return_value=0) as report,
+            ):
+                status = dev.main(
+                    [
+                        "audio-debug",
+                        "--root",
+                        str(root),
+                        "--runtime-dir",
+                        "/tmp/msys-main",
+                        "--no-logs",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        report.assert_called_once()
+        self.assertTrue(report.call_args.kwargs["audio"])
+        self.assertEqual(report.call_args.kwargs["lines"], 0)
+        self.assertTrue(report.call_args.kwargs["json_output"])
+
+    def test_audio_report_fails_clearly_when_role_is_not_registered(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["ssh"],
+            1,
+            stdout=self.report_archive(audio=True, audio_status=1),
+            stderr=b"",
+        )
+        output = io.StringIO()
+        with (
+            mock.patch.object(dev, "ssh_capture_bytes", return_value=completed),
+            redirect_stdout(output),
+        ):
+            status = dev.command_fast_report(
+                self.context(),
+                "/tmp/msys-main",
+                "/tmp/msysd.log",
+                lines=80,
+                screenshot=None,
+                display=None,
+                backend="auto",
+                timeout=45,
+                force=False,
+                audio=True,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn("registered=false", output.getvalue())
+        self.assertIn("ROLE_UNAVAILABLE", output.getvalue())
+
     def test_fast_cli_defaults_to_status_bundle_and_requires_explicit_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -234,6 +405,29 @@ class FastWorkflowTests(unittest.TestCase):
         self.assertFalse(fast.call_args_list[0].kwargs["run"])
         self.assertFalse(fast.call_args_list[0].kwargs["deliver"])
         self.assertTrue(fast.call_args_list[1].kwargs["run"])
+
+    def test_fast_cli_can_include_audio_acceptance_in_final_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "msys-audio").mkdir()
+            with (
+                mock.patch.dict(os.environ, {"MSYS_DEV_TARGET": "root@device"}),
+                mock.patch.object(dev, "CONFIG_PATH", root / "missing.json"),
+                mock.patch.object(dev, "command_fast", return_value=0) as fast,
+            ):
+                status = dev.main(
+                    [
+                        "fast",
+                        "--root",
+                        str(root),
+                        "--repo",
+                        "msys-audio",
+                        "--audio",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertTrue(fast.call_args.kwargs["audio"])
 
     def test_canonical_settings_and_apps_delivery_get_required_sdk_overlay(self) -> None:
         for repository, package_id in (
@@ -403,6 +597,100 @@ class FastWorkflowTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         sync.assert_called_once_with(self.context(root), ["msys-hal"], force=False)
+
+    def test_audio_delivery_syncs_target_helper_before_packaging(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "msys-audio"
+            package.mkdir()
+            (package / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "msys.manifest.v1",
+                        "package": {"id": "org.msys.audio.bluez"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(dev, "command_sync", return_value=0) as sync,
+                mock.patch.object(
+                    dev, "command_package_deliver", return_value=0
+                ) as deliver,
+                mock.patch.object(dev, "command_fast_report", return_value=0),
+            ):
+                result = dev.command_fast(
+                    self.context(root),
+                    ["msys-audio"],
+                    safe=False,
+                    profile="mobile-spi",
+                    runtime_dir="/tmp/msys-main",
+                    state_dir="/opt/msys-state",
+                    log_file="/tmp/msysd.log",
+                    run=False,
+                    deliver=True,
+                    lines=0,
+                    screenshot=None,
+                    display=None,
+                    backend="auto",
+                    timeout=45,
+                    force=False,
+                    full_sync=False,
+                    audio=True,
+                )
+
+        self.assertEqual(result, 0)
+        sync.assert_called_once_with(
+            self.context(root), ["msys-audio"], force=False
+        )
+        deliver.assert_called_once()
+
+    def test_audio_native_manager_opt_in_reaches_target_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "msys-audio"
+            package.mkdir()
+            (package / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "msys.manifest.v1",
+                        "package": {"id": "org.msys.audio.bluez"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(dev, "command_sync", return_value=0) as sync,
+                mock.patch.object(dev, "command_package_deliver", return_value=0),
+                mock.patch.object(dev, "command_fast_report", return_value=0),
+            ):
+                result = dev.command_fast(
+                    self.context(root),
+                    ["msys-audio"],
+                    safe=False,
+                    profile="mobile-spi",
+                    runtime_dir="/tmp/msys-main",
+                    state_dir="/opt/msys-state",
+                    log_file="/tmp/msysd.log",
+                    run=False,
+                    deliver=True,
+                    lines=0,
+                    screenshot=None,
+                    display=None,
+                    backend="auto",
+                    timeout=45,
+                    force=False,
+                    full_sync=False,
+                    native_audio_manager=True,
+                )
+
+        self.assertEqual(result, 0)
+        sync.assert_called_once_with(
+            self.context(root),
+            ["msys-audio"],
+            force=False,
+            native_audio_manager=True,
+        )
 
     def test_full_sync_preserves_explicit_source_upload_for_package_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

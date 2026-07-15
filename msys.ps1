@@ -6,7 +6,7 @@
 .DESCRIPTION
   Ordinary commands use a one-shot WSL process by default. Auto mode reuses a
   healthy local broker only after it was explicitly started; fast/q, quick,
-  accept, ui-accept, and debug select On automatically, while Off always stays
+  audio-debug, storage, accept, ui-accept, and debug select On automatically, while Off always stays
   one-shot. For the fastest repeated edit
   and debug loop, enter ``shell`` once and run ``msys debug`` (or ``m debug``)
   inside it. First-time key authentication deliberately stays interactive.
@@ -43,6 +43,8 @@ MSYS Windows development shortcut
   .\msys.cmd connect             # authenticate once; keeps SSH warm
   .\msys.cmd shell               # fastest loop: cd a repo, then mq/mqs/mqshot
   .\msys.cmd fast --repo msys-settings       # persistent broker + one debug bundle
+  .\msys.cmd audio-debug                     # one-SSH audio role/stack/RSS acceptance
+  .\msys.cmd storage                        # one-SSH read-only space/USB cleanup plan
   .\msys.cmd accept                           # persistent broker + one read-only acceptance
   .\msys.cmd ui-accept                        # one-SSH reversible P0 UI route
   .\msys.cmd fast --repo msys-settings --deliver --screenshot .\artifacts\settings.png
@@ -569,6 +571,16 @@ switch ($Command.ToLowerInvariant()) {
         $cliArgs = @("fast") + $fastArgs
         break
     }
+    { $_ -in @("audio-debug", "audio-accept") } {
+        $fastBrokerDefault = $true
+        $cliArgs = @("audio-debug") + $translatedArgs
+        break
+    }
+    { $_ -in @("storage", "storage-clean") } {
+        $fastBrokerDefault = $true
+        $cliArgs = @("storage") + $translatedArgs
+        break
+    }
     "accept" {
         $fastBrokerDefault = $true
         $cliArgs = @("accept") + $translatedArgs
@@ -683,7 +695,7 @@ if ($brokerMode -notin @("auto", "on", "off")) {
 
 # Key setup and initial password authentication require a real interactive
 # stdin. Auto only reuses a healthy explicitly started broker; it never starts
-# one. The fast/q, quick, accept, ui-accept, and debug workflows select On when
+# one. The fast/q, quick, audio-debug, storage, accept, ui-accept, and debug workflows select On when
 # no explicit -Broker value was given; other commands retain Auto. Off always
 # uses one-shot WSL.
 $actionName = $Command.ToLowerInvariant()

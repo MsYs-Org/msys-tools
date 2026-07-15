@@ -463,6 +463,110 @@ class DeliveryCommandTests(unittest.TestCase):
                 self.assertIn(f"/{repository}.new", finalise)
                 self.assertIn(f"/msys-dev/{repository}", finalise)
 
+    def test_audio_bootstrap_builds_installs_and_inventories_target_elf(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = "msys-audio"
+            (root / repository).mkdir()
+            context = self.context(root)
+            captures = [
+                subprocess.CompletedProcess([], 1, stdout=""),
+                subprocess.CompletedProcess([], 0, stdout="built\n"),
+            ]
+            with (
+                mock.patch.object(dev, "ssh_capture", side_effect=captures) as capture,
+                mock.patch.object(dev.shutil, "which", return_value=None),
+                mock.patch.object(dev, "run_local"),
+                mock.patch.object(dev, "ssh") as ssh,
+                mock.patch.object(
+                    dev,
+                    "_target_native_source_identity",
+                    return_value=(
+                        "org.msys.audio.bluez",
+                        "0.1.6",
+                        root / repository / "manifest.json",
+                    ),
+                ),
+                mock.patch.object(
+                    dev, "_record_target_native_artifact", return_value={}
+                ) as record,
+            ):
+                result = dev.command_sync(context, [repository])
+
+        self.assertEqual(result, 0)
+        spec = dev.TARGET_NATIVE_REPOSITORIES[repository]
+        self.assertEqual(spec.package_id, "org.msys.audio.bluez")
+        build = capture.call_args_list[1].args[1]
+        self.assertIn("make -j1 -C native", build)
+        self.assertIn('CC="$compiler" all check', build)
+        self.assertIn("DESTDIR='/opt/msys-dev/.sync/msys-audio.new/files/runtime/aarch64' install", build)
+        self.assertIn(spec.relative_path, build)
+        self.assertIn("--self-test", build)
+        self.assertIn("--build-probe", build)
+        self.assertIn("msys-hci-bootstrap 1", build)
+        self.assertIn(str(spec.runtime_inventory_path), build)
+        self.assertIn(context.remote_python, build)
+        self.assertNotIn("MSYS_SDK_DIR=", build)
+        self.assertNotIn("install-manager", build)
+        record.assert_called_once()
+        self.assertEqual(record.call_args.args[2], spec)
+        finalise = ssh.call_args_list[-1].args[1]
+        self.assertIn("/msys-audio.new", finalise)
+        self.assertIn("/msys-dev/msys-audio", finalise)
+
+    def test_audio_native_manager_is_explicit_and_uses_synced_sdk(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = "msys-audio"
+            (root / repository).mkdir()
+            context = self.context(root)
+            captures = [
+                subprocess.CompletedProcess([], 0, stdout=""),
+                subprocess.CompletedProcess([], 0, stdout="built\n"),
+            ]
+            with (
+                mock.patch.object(dev, "ssh_capture", side_effect=captures) as capture,
+                mock.patch.object(dev.shutil, "which", return_value=None),
+                mock.patch.object(dev, "run_local"),
+                mock.patch.object(dev, "ssh"),
+                mock.patch.object(
+                    dev,
+                    "_target_native_source_identity",
+                    return_value=(
+                        "org.msys.audio.bluez",
+                        "0.1.11",
+                        root / repository / "manifest.json",
+                    ),
+                ),
+                mock.patch.object(
+                    dev, "_record_target_native_artifacts", return_value={}
+                ) as record,
+            ):
+                result = dev.command_sync(
+                    context,
+                    [repository],
+                    native_audio_manager=True,
+                )
+
+        self.assertEqual(result, 0)
+        build = capture.call_args_list[1].args[1]
+        self.assertIn("MSYS_SDK_DIR='/opt/msys-dev/msys-sdk'", build)
+        self.assertIn("/opt/msys-dev/msys-sdk/include/msys/mipc.h", build)
+        self.assertIn("/opt/msys-dev/msys-sdk/src/mipc.c", build)
+        self.assertIn("manager check-manager", build)
+        self.assertIn("install-manager", build)
+        self.assertIn("msys-audio-manager-native", build)
+        record.assert_called_once()
+        recorded_specs = record.call_args.args[2]
+        self.assertEqual(len(recorded_specs), 2)
+        self.assertEqual(
+            [spec.relative_path for spec in recorded_specs],
+            [
+                "files/runtime/aarch64/bin/msys-hci-bootstrap",
+                "files/runtime/aarch64/bin/msys-audio-manager-native",
+            ],
+        )
+
     def test_x11display_sync_rebuilds_and_verifies_staging_before_swap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

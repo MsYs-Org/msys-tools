@@ -67,6 +67,62 @@ and recent warning/error lines in one SSH execution:
 .\msys.cmd fast --repo msys-settings --screenshot .\artifacts\settings.png --force
 ```
 
+For Bluetooth audio work, `audio-debug` (alias `audio-accept`) is the one-step,
+read-only acceptance path. The Windows shortcut starts or reuses the same
+loopback WSL broker, then one SSH execution returns the current immutable
+release, audio component registration, `role:audio-manager get_state`, private
+`dbus-daemon`/`bluetoothd`/BlueALSA/squeezelite process RSS and PSS, any
+competing host `bluetoothd`, bounded audio logs, and an optional screenshot:
+
+```powershell
+.\msys.cmd audio-debug
+.\msys.cmd audio-debug --json
+.\msys.cmd audio-debug --screenshot .\artifacts\audio.png --force
+```
+
+The command exits nonzero when the `audio-manager` role cannot be called. A
+registered provider that truthfully reports `available=false` with a hardware
+reason such as `controller-not-registered` is still a successful diagnostic;
+the state is not fabricated. To deliver an audio package and collect the same
+evidence without another debug command, append `--audio` to the existing fast
+flow:
+
+```powershell
+.\msys.cmd fast --repo msys-audio --deliver --audio
+```
+
+Use `storage` (alias `storage-clean`) to inspect low-space targets without a
+sequence of SSH commands. The default is a read-only one-SSH report containing
+root filesystem space, `/mnt/msys-usb` mount/space details, read-only package
+version and whole-Release inventories, and the exact reclaimable whitelist:
+
+```powershell
+.\msys.cmd storage
+.\msys.cmd storage --json
+```
+
+Only generated cache directories inside `msys-*` development repositories,
+`/opt/msys-dev/.msys-*.previous` sync copies with a live sibling, installer-owned
+transient downloads/staging, and rotated `msysd` logs are eligible. Every package
+version and every whole-system Release is report-only with
+`deletion_eligible=false`, including versions that appear unreferenced. App
+state, the current log, Release `current`/`previous`, `/root/.codex`, `/app`, and
+arbitrary host data are never candidates.
+
+Mutation is explicit. `--apply` first writes
+`/mnt/msys-usb/msys-offload/<UTC-date>/payload.tar`, commits its SHA-256
+sidecar, rereads the entire archive, and reconstructs each candidate's exact
+tree digest from every tar member. The candidate roots and content are checked
+again before removal; any archive or revalidation failure leaves them intact:
+
+```powershell
+.\msys.cmd storage --apply
+```
+
+If no mounted USB is available, `--apply` fails before deletion. Deleting
+without an archive is available only through the deliberately explicit
+`storage --apply --no-archive`; `--no-archive` by itself is rejected.
+
 Source sync by itself is not live deployment for the formal SysV release; the
 command says so explicitly. Opt in to the existing MAF build/install
 transaction with `--deliver`. Repeated `--repo` values are fingerprinted and
@@ -184,7 +240,9 @@ can still be managed explicitly:
 ```
 
 Auto mode never starts a broker; it only reuses one created explicitly by
-`broker start`. The `fast`/`q`, `quick`/`deploy`, `accept`, `ui-accept`, and
+`broker start`. The `fast`/`q`, `quick`/`deploy`, `audio-debug`/`audio-accept`,
+`storage`/`storage-clean`,
+`accept`, `ui-accept`, and
 `debug` shortcuts select On automatically unless an explicit broker mode is
 supplied. `-Broker On` starts/requires it, and `-Broker Off` always uses
 one-shot WSL. The broker listener is strictly `127.0.0.1`, its per-session
@@ -215,7 +273,7 @@ and `connect` deliberately use an interactive one-shot WSL command because an
 SSH password prompt needs a real terminal. If a workstation cannot use
 localhost forwarding, keep the default Auto mode without starting a broker,
 or choose `-Broker Off`/`MSYS_DEV_BROKER=Off` explicitly. The frequent
-`fast`, `quick`, `accept`, `ui-accept`, and `debug` paths start or reuse the local broker
+`fast`, `quick`, `audio-debug`, `storage`, `accept`, `ui-accept`, and `debug` paths start or reuse the local broker
 automatically, so repeated PowerShell commands do not repeatedly start WSL.
 `-Distro NAME` selects a non-default WSL distribution. For a nonstandard mount,
 set `MSYS_WSL_WORKSPACE` to the absolute Linux workspace path.
@@ -905,6 +963,23 @@ into a temporary package copy, leaves the workstation source untouched, and
 checks the ELF hash again inside the finished archive before contacting the
 install agent. A newer manifest therefore cannot silently ship an older cached
 AArch64 binary.
+
+`msys-audio` keeps its established bootstrap-only path as the default, so a
+0.1.11 scan fix can still be synchronized and delivered without a remote SDK.
+The candidate C audio manager is an explicit second target artifact:
+
+```powershell
+.\msys.cmd sync --repo msys-sdk
+.\msys.cmd fast --repo msys-audio --deliver --audio --native-audio-manager
+```
+
+The opt-in build reads the explicit remote `/opt/msys-dev/msys-sdk` headers and
+`src/mipc.c`. The marker binds both `msys-hci-bootstrap` and
+`msys-audio-manager-native` to independent probes and SHA-256 values. Delivery
+downloads both verified AArch64 ELFs into the same temporary package, updates
+both `runtime.json` size/hash records, and requires both paths to have the same
+hashes in the finished MAF `hashes.json`. A later default bootstrap-only sync
+does not try to build the manager or require that SDK.
 
 `package validate` accepts a package directory, a standalone `manifest.json`,
 or a tar/zip/MAF archive and identifies the container by content. Add

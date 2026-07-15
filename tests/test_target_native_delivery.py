@@ -65,6 +65,54 @@ class TargetNativeDeliveryTests(unittest.TestCase):
         )
         return package
 
+    def make_audio_package(self, root: Path) -> Path:
+        package = root / "msys-audio"
+        runtime = package / "files/runtime/aarch64"
+        runtime.mkdir(parents=True)
+        app = package / "files/app"
+        app.mkdir(parents=True)
+        (app / "main.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+        (runtime / "runtime.json").write_text(
+            json.dumps(
+                {
+                    "schema": "msys.audio-runtime.v1",
+                    "architecture": "aarch64",
+                    "files": [
+                        {
+                            "path": "files/runtime/aarch64/bin/bluetoothd",
+                            "size": 7,
+                            "sha256": "a" * 64,
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        manifest = {
+            "schema": "msys.manifest.v1",
+            "package": {
+                "id": "org.msys.audio.bluez",
+                "version": "0.1.6",
+                "kind": "system",
+            },
+            "components": [
+                {
+                    "id": "audio-manager",
+                    "runtime": "python",
+                    "exec": ["python", "@package/files/app/main.py"],
+                    "lifecycle": "manual",
+                    "restart": "never",
+                    "readiness": {"mode": "mipc-ready", "timeout_ms": 1000},
+                }
+            ],
+        }
+        (package / "manifest.json").write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
+        return package
+
     def test_hal_self_check_version_must_equal_manifest(self) -> None:
         spec = dev.TARGET_NATIVE_ARTIFACTS["org.msys.hal.linux"]
         native_hash = "a" * 64
@@ -151,6 +199,258 @@ class TargetNativeDeliveryTests(unittest.TestCase):
                 self.assertEqual(checked["sha256"], native_hash)
                 self.assertEqual(checked["probe"], expected_probe)
 
+    def test_audio_bootstrap_uses_its_real_self_test_and_build_probe(self) -> None:
+        spec = dev.TARGET_NATIVE_ARTIFACTS["org.msys.audio.bluez"]
+        native_hash = "d" * 64
+        with mock.patch.object(
+            dev,
+            "ssh_capture",
+            side_effect=[
+                completed(0, f"{native_hash}  binary\n"),
+                completed(
+                    0,
+                    "msys-hci-bootstrap self-test: ok\n"
+                    "msys-hci-bootstrap 1\n",
+                ),
+                completed(0, f"{native_hash}  binary\n"),
+            ],
+        ) as capture:
+            checked = dev._probe_remote_native_binary(
+                self.context(Path("/workspace")),
+                "/opt/msys-dev/msys-audio/files/runtime/aarch64/bin/"
+                "msys-hci-bootstrap",
+                spec,
+                expected_version="0.1.6",
+            )
+
+        probe_command = capture.call_args_list[1].args[1]
+        self.assertIn("--self-test", probe_command)
+        self.assertIn("--build-probe", probe_command)
+        self.assertNotIn("--msys-build-probe", probe_command)
+        self.assertEqual(
+            checked["probe"],
+            {
+                "kind": "hci-bootstrap",
+                "self_test": "msys-hci-bootstrap self-test: ok",
+                "build_probe": "msys-hci-bootstrap 1",
+            },
+        )
+
+    def test_audio_manager_candidate_uses_self_check_and_matching_build_probe(self) -> None:
+        spec = dev.TARGET_NATIVE_OPTIONAL_ARTIFACTS["org.msys.audio.bluez"][0]
+        native_hash = "e" * 64
+        report = {
+            "ok": True,
+            "version": "0.2",
+            "stage": "candidate",
+            "production_default": False,
+            "rss_kib": 712,
+        }
+        with mock.patch.object(
+            dev,
+            "ssh_capture",
+            side_effect=[
+                completed(0, f"{native_hash}  binary\n"),
+                completed(
+                    0,
+                    json.dumps(report)
+                    + "\nmsys-audio-manager-native 0.2 candidate\n",
+                ),
+                completed(0, f"{native_hash}  binary\n"),
+            ],
+        ):
+            checked = dev._probe_remote_native_binary(
+                self.context(Path("/workspace")),
+                "/opt/msys-dev/msys-audio/files/runtime/aarch64/bin/"
+                "msys-audio-manager-native",
+                spec,
+                expected_version="0.1.11",
+            )
+
+        self.assertEqual(checked["sha256"], native_hash)
+        self.assertEqual(checked["probe"]["kind"], "audio-manager-native")
+        self.assertEqual(checked["probe"]["version"], "0.2")
+        self.assertFalse(checked["probe"]["production_default"])
+
+    def test_multi_artifact_marker_records_each_independent_probe_and_hash(self) -> None:
+        specs = dev._target_native_package_specs("org.msys.audio.bluez")
+        checked = [
+            {
+                "sha256": "1" * 64,
+                "probe": {"kind": "hci-bootstrap"},
+            },
+            {
+                "sha256": "2" * 64,
+                "probe": {"kind": "audio-manager-native", "version": "0.2"},
+            },
+        ]
+        with (
+            mock.patch.object(
+                dev, "_probe_remote_native_binary", side_effect=checked
+            ) as probe,
+            mock.patch.object(dev, "ssh") as ssh,
+        ):
+            marker = dev._record_target_native_artifacts(
+                self.context(Path("/workspace")),
+                "/opt/msys-dev/.sync/msys-audio.new",
+                specs,
+                package_id="org.msys.audio.bluez",
+                version="0.1.11",
+            )
+
+        self.assertEqual(probe.call_count, 2)
+        self.assertEqual(
+            [item["path"] for item in marker["artifacts"]],
+            [spec.relative_path for spec in specs],
+        )
+        self.assertEqual(
+            [item["sha256"] for item in marker["artifacts"]],
+            ["1" * 64, "2" * 64],
+        )
+        marker_command = ssh.call_args.args[1]
+        self.assertIn("msys-hci-bootstrap", marker_command)
+        self.assertIn("msys-audio-manager-native", marker_command)
+
+    def test_audio_delivery_fills_missing_helper_and_updates_runtime_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self.make_audio_package(root)
+            spec = dev.TARGET_NATIVE_ARTIFACTS["org.msys.audio.bluez"]
+            target_bytes = b"target-aarch64-hci-bootstrap"
+            target_hash = digest(target_bytes)
+            marker = {
+                "schema": dev.TARGET_NATIVE_MARKER_SCHEMA,
+                "package": spec.package_id,
+                "version": "0.1.6",
+                "path": spec.relative_path,
+                "sha256": target_hash,
+                "probe": {
+                    "kind": "hci-bootstrap",
+                    "self_test": "msys-hci-bootstrap self-test: ok",
+                    "build_probe": "msys-hci-bootstrap 1",
+                },
+            }
+
+            def download(argv: list[str], check: bool = True):
+                del check
+                Path(argv[-1]).write_bytes(target_bytes)
+                return completed()
+
+            with (
+                mock.patch.object(
+                    dev,
+                    "_load_target_native_artifacts",
+                    return_value=((spec, marker),),
+                ),
+                mock.patch.object(dev, "run_local", side_effect=download) as scp,
+                dev._prepared_target_native_package(
+                    self.context(root), package, None
+                ) as (prepared, _manifest, prepared_artifacts),
+            ):
+                helper = prepared.joinpath(*Path(spec.relative_path).parts)
+                inventory = json.loads(
+                    prepared.joinpath(
+                        *Path(str(spec.runtime_inventory_path)).parts
+                    ).read_text(encoding="utf-8")
+                )
+                entries = {
+                    item["path"]: item for item in inventory["files"]
+                }
+                self.assertEqual(helper.read_bytes(), target_bytes)
+                self.assertTrue(helper.stat().st_mode & 0o111)
+                self.assertEqual(entries[spec.relative_path]["size"], len(target_bytes))
+                self.assertEqual(entries[spec.relative_path]["sha256"], target_hash)
+                self.assertEqual(prepared_artifacts, ((spec, marker),))
+
+            self.assertFalse(package.joinpath(*Path(spec.relative_path).parts).exists())
+            self.assertIn(
+                "root@example:/opt/msys-dev/msys-audio/"
+                "files/runtime/aarch64/bin/msys-hci-bootstrap",
+                scp.call_args.args[0],
+            )
+
+    def test_audio_delivery_packages_two_verified_elfs_in_inventory_and_content_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self.make_audio_package(root)
+            specs = dev._target_native_package_specs("org.msys.audio.bluez")
+            payloads = {
+                specs[0].relative_path: b"target-aarch64-hci-bootstrap",
+                specs[1].relative_path: b"target-aarch64-audio-manager",
+            }
+            artifacts = tuple(
+                (
+                    spec,
+                    {
+                        "path": spec.relative_path,
+                        "sha256": digest(payloads[spec.relative_path]),
+                        "probe": {"kind": spec.probe},
+                    },
+                )
+                for spec in specs
+            )
+
+            def download(argv: list[str], check: bool = True):
+                del check
+                remote = argv[-2]
+                destination = Path(argv[-1])
+                for relative, data in payloads.items():
+                    if remote.endswith(relative):
+                        destination.write_bytes(data)
+                        return completed()
+                raise AssertionError(f"unexpected target-native download: {remote}")
+
+            with (
+                mock.patch.object(
+                    dev, "_load_target_native_artifacts", return_value=artifacts
+                ),
+                mock.patch.object(dev, "run_local", side_effect=download) as scp,
+                mock.patch.object(
+                    dev, "command_install_archive", return_value=0
+                ),
+                redirect_stdout(io.StringIO()),
+            ):
+                result = dev.command_package_deliver(
+                    self.context(WORKSPACE),
+                    WORKSPACE,
+                    package,
+                    root / "dist",
+                    runtime_dir="/tmp/msys-main",
+                    state_dir="/opt/msys-state",
+                    force=False,
+                    source_date_epoch=0,
+                    manifest_path=None,
+                    artifact_format="maf",
+                    overlays=[],
+                    legacy_events=False,
+                )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(scp.call_count, 2)
+            artifact = root / "dist/org.msys.audio.bluez-0.1.6.maf"
+            with tarfile.open(artifact, "r:gz") as archive:
+                hashes = json.loads(archive.extractfile("./hashes.json").read())
+                inventory = json.loads(
+                    archive.extractfile(
+                        "./files/runtime/aarch64/runtime.json"
+                    ).read()
+                )
+                for spec in specs:
+                    data = archive.extractfile("./" + spec.relative_path).read()
+                    expected = digest(payloads[spec.relative_path])
+                    self.assertEqual(digest(data), expected)
+                    self.assertEqual(hashes["files"][spec.relative_path], expected)
+            by_path = {item["path"]: item for item in inventory["files"]}
+            for spec in specs:
+                self.assertEqual(
+                    by_path[spec.relative_path]["size"],
+                    len(payloads[spec.relative_path]),
+                )
+                self.assertEqual(
+                    by_path[spec.relative_path]["sha256"],
+                    digest(payloads[spec.relative_path]),
+                )
+
     def test_deliver_packages_recovered_target_elf_without_mutating_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -177,7 +477,9 @@ class TargetNativeDeliveryTests(unittest.TestCase):
 
             with (
                 mock.patch.object(
-                    dev, "_load_target_native_marker", return_value=marker
+                    dev,
+                    "_load_target_native_artifacts",
+                    return_value=((dev.TARGET_NATIVE_ARTIFACTS["org.msys.hal.linux"], marker),),
                 ),
                 mock.patch.object(dev, "run_local", side_effect=download) as scp,
                 mock.patch.object(
@@ -223,7 +525,7 @@ class TargetNativeDeliveryTests(unittest.TestCase):
             with (
                 mock.patch.object(
                     dev,
-                    "_load_target_native_marker",
+                    "_load_target_native_artifacts",
                     side_effect=PackageFlowError("marker missing"),
                 ),
                 mock.patch.object(dev, "run_local") as download,
