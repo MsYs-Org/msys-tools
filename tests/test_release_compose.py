@@ -166,8 +166,12 @@ class ReleaseComposeTests(unittest.TestCase):
         self.assertEqual(os.readlink(self.formal / "current"), current_before)
         self.assertEqual(os.readlink(self.formal / "previous"), previous_before)
 
-    def test_formal_maf_map_uses_split_application_packages(self) -> None:
+    def test_formal_maf_map_covers_audio_and_split_application_packages(self) -> None:
         self.assertNotIn("msys-apps", release_compose.MAF_ENTRY_PACKAGE_IDS)
+        self.assertEqual(
+            release_compose.MAF_ENTRY_PACKAGE_IDS["msys-audio"],
+            "org.msys.audio.bluez",
+        )
         self.assertEqual(
             {
                 name: release_compose.MAF_ENTRY_PACKAGE_IDS[name]
@@ -179,6 +183,30 @@ class ReleaseComposeTests(unittest.TestCase):
                 "msys-device-info": "org.msys.device-info",
             },
         )
+        self.compose()
+        audio_manifest = json.loads(
+            (self.output / "candidate-1" / "msys-audio" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(audio_manifest["package"]["id"], "org.msys.audio.bluez")
+
+    def test_audio_maf_is_required_for_a_formal_compose(self) -> None:
+        mafs = dict(self.mafs)
+        del mafs["msys-audio"]
+        with self.assertRaisesRegex(
+            release_compose.ReleaseComposeError,
+            r"MAF entry set mismatch .*msys-audio",
+        ):
+            release_compose.compose_release_source(
+                release_id="candidate-1",
+                release_root=self.formal,
+                baseline_release="base-1",
+                output_root=self.output,
+                source_entries=self.sources,
+                maf_entries=mafs,
+                api=self.api,
+            )
 
     def test_reusing_id_after_source_change_is_rejected(self) -> None:
         self.compose()

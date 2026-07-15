@@ -80,7 +80,10 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
                 "/opt/msys-dev",
                 "/opt/msys-dev/release-sources",
                 ["msys-core=/opt/final/core"],
-                ["msys-shell-native=/opt/input/shell.maf"],
+                [
+                    "msys-shell-native=/opt/input/shell.maf",
+                    "msys-audio=/opt/input/audio.maf",
+                ],
             )
         self.assertEqual(result, 0)
         command = capture.call_args.args[1]
@@ -90,6 +93,7 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
         self.assertIn("'--baseline-release' 'base-1'", command)
         self.assertIn("'msys-core=/opt/final/core'", command)
         self.assertIn("'msys-shell-native=/opt/input/shell.maf'", command)
+        self.assertIn("'msys-audio=/opt/input/audio.maf'", command)
         for forbidden in ("activate", "rollback", "restart", "systemctl"):
             self.assertNotIn(forbidden, command.lower())
 

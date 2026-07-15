@@ -93,6 +93,7 @@ python -m msys_tools.dev release compose 2026.07.13-8-mobile-rc1 `
   --maf msys-shell-pyside=/opt/msys-dev/release-inputs/SHELL_PYSIDE.maf `
   --maf msys-x11-session=/opt/msys-dev/release-inputs/X11.maf `
   --maf msys-hal=/opt/msys-dev/release-inputs/HAL.maf `
+  --maf msys-audio=/opt/msys-dev/release-inputs/AUDIO.maf `
   --maf msys-input-touch=/opt/msys-dev/release-inputs/INPUT.maf `
   --maf msys-settings=/opt/msys-dev/release-inputs/SETTINGS.maf `
   --maf msys-notes=/opt/msys-dev/release-inputs/NOTES.maf `
@@ -101,6 +102,10 @@ python -m msys_tools.dev release compose 2026.07.13-8-mobile-rc1 `
   --maf msys-openstick-ch347=/opt/msys-dev/release-inputs/CH347.maf `
   --maf msys-install=/opt/msys-dev/release-inputs/INSTALL.maf
 ```
+
+`msys-audio` is a required formal Release entry. Its MAF manifest package id
+must be `org.msys.audio.bluez`; compose rejects a missing audio entry or an
+archive with a different identity.
 
 The result is `/opt/msys-dev/release-sources/RELEASE_ID`. `compose.json`
 records deterministic input and tree digests. Repeating the same compose is

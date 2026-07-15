@@ -33,6 +33,7 @@ MAF_ENTRY_PACKAGE_IDS = {
     "msys-shell-pyside": "org.msys.shell.pyside",
     "msys-x11-session": "org.msys.x11.session",
     "msys-hal": "org.msys.hal.linux",
+    "msys-audio": "org.msys.audio.bluez",
     "msys-input-touch": "org.msys.input.touch",
     "msys-settings": "org.msys.settings",
     "msys-notes": "org.msys.notes",
