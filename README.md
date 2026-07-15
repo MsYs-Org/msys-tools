@@ -661,14 +661,19 @@ capture, transfer, validation, and local-output failures; it will not replace
 an existing workstation image unless `--force` is explicit.
 
 `font-doctor` checks the rendering backend rather than trusting the installed
-font list. By default it probes `/opt/msys/current/.runtime/python/bin/python3`
-when that executable exists, then falls back to the configured development
-runtime. An explicit `--python` always wins. It starts the selected isolated
+font list. By default it probes the live Core interpreter recorded by the
+runtime lock, then falls back to the formal current and configured development
+runtimes. This prevents a healthy formal candidate from hiding that a running
+development Core is launching every Tk component through a core-font-only
+Python. An explicit `--python` always wins. It starts the selected isolated
 Python with bytecode writes disabled,
 opens real Tk Label/Button/Entry/Text/Treeview controls on the active display,
-and reports the actual selected family, per-CJK-glyph advances, mapped
-Xft/Fontconfig/FreeType libraries, and probe PSS. Use the candidate runtime path
-before a system-release switch:
+renders white CJK glyphs into a black X11 probe window, reads those pixels back
+with `XGetImage`, and reports the actual ink bounding box, selected family,
+available family catalog, per-glyph advances, mapped Tk/Xft/Fontconfig/FreeType
+libraries, interpreter path, and probe PSS. A fixed-only catalog or zero real
+CJK ink is a hard failure even when Tk reports plausible widths. Use the
+candidate runtime path before a system-release switch:
 
 ```powershell
 .\msys.cmd font-doctor --python /opt/msys/releases/CANDIDATE/.runtime/python/bin/python3

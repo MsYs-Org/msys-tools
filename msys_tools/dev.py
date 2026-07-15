@@ -5061,15 +5061,31 @@ def command_font_doctor(
         # current release exists.
         command = environment + f"exec {quote_sh(python)} {arguments}"
     else:
-        # The UI runs from the atomically selected formal release.  Probe that
-        # exact Tk/Xft runtime by default; retain the development runtime only
-        # as a fallback for targets that have not staged a formal release yet.
+        # Probe the interpreter of the Core which is actually supervising Tk
+        # components.  A healthy formal candidate is irrelevant when the live
+        # development Core launches applications through a different
+        # core-font-only runtime.  Formal/development paths remain bounded
+        # fallbacks for a stopped runtime.
         current_python = (
             f"{DEFAULT_SYSTEM_RELEASE_ROOT}/current/{DEFAULT_REMOTE_PYTHON_REL}"
         )
+        lock_file = str(PurePosixPath(runtime_dir) / ".msysd.lock")
+        pid_file = str(PurePosixPath(runtime_dir) / "msysd.pid")
         command = (
             environment
-            + f"if test -x {quote_sh(current_python)}; then "
+            + "active_python=''; msys_pid=''; "
+            + f"for active_pid_file in {quote_sh(lock_file)} {quote_sh(pid_file)}; do "
+            + "if test ! -r \"$active_pid_file\"; then continue; fi; "
+            + "msys_pid=$(cat \"$active_pid_file\" 2>/dev/null || true); "
+            + "case \"$msys_pid\" in ''|*[!0-9]*) msys_pid='' ;; esac; "
+            + "if test -n \"$msys_pid\" && test -e \"/proc/$msys_pid/exe\" "
+            + "&& tr '\\0' '\\n' <\"/proc/$msys_pid/cmdline\" "
+            + "| grep -Fqx -- 'msys_core.msysd'; then "
+            + "active_python=$(readlink -f \"/proc/$msys_pid/exe\" 2>/dev/null || true); "
+            + "break; fi; done; "
+            + "if test -n \"$active_python\" && test -x \"$active_python\"; then "
+            + f"exec \"$active_python\" {arguments}; "
+            + f"elif test -x {quote_sh(current_python)}; then "
             + f"exec {quote_sh(current_python)} {arguments}; "
             + f"elif test -x {quote_sh(ctx.remote_python)}; then "
             + f"exec {quote_sh(ctx.remote_python)} {arguments}; "
@@ -6930,8 +6946,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--python",
         dest="font_python",
         help=(
-            "absolute target Python path (default: formal current release, "
-            "then configured development runtime)"
+            "absolute target Python path (default: live Core interpreter, "
+            "then formal current and configured development runtimes)"
         ),
     )
     font_doctor.add_argument("--display")
