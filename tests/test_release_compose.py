@@ -166,6 +166,62 @@ class ReleaseComposeTests(unittest.TestCase):
         self.assertEqual(os.readlink(self.formal / "current"), current_before)
         self.assertEqual(os.readlink(self.formal / "previous"), previous_before)
 
+    def test_explicit_xft_runtime_replaces_stock_baseline_runtime(self) -> None:
+        runtime = self.root / "tk-xft-runtime"
+        python = runtime / "bin" / "python3"
+        python.parent.mkdir(parents=True)
+        python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        python.chmod(python.stat().st_mode | stat.S_IXUSR)
+        tk = runtime / "lib" / "libtcl9tk9.0.so"
+        tk.parent.mkdir()
+        tk.write_bytes(b"ELF fixture\0libXft.so.2\0")
+        (runtime / "runtime-marker.txt").write_text("xft\n", encoding="utf-8")
+
+        result = release_compose.compose_release_source(
+            release_id="candidate-1",
+            release_root=self.formal,
+            baseline_release="base-1",
+            output_root=self.output,
+            source_entries=self.sources,
+            maf_entries=self.mafs,
+            python_runtime=runtime,
+            api=self.api,
+        )
+
+        candidate = Path(str(result["path"]))
+        self.assertEqual(
+            (candidate / ".runtime/python/runtime-marker.txt").read_text(
+                encoding="utf-8"
+            ),
+            "xft\n",
+        )
+        self.assertEqual(result["python_runtime"]["origin"], "xft-override")
+        self.assertTrue(result["python_runtime"]["xft"])
+
+    def test_runtime_override_without_xft_is_rejected(self) -> None:
+        runtime = self.root / "stock-runtime"
+        python = runtime / "bin" / "python3"
+        python.parent.mkdir(parents=True)
+        python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        python.chmod(python.stat().st_mode | stat.S_IXUSR)
+        tk = runtime / "lib" / "libtcl9tk9.0.so"
+        tk.parent.mkdir()
+        tk.write_bytes(b"ELF fixture without outline backend")
+
+        with self.assertRaisesRegex(
+            release_compose.ReleaseComposeError, "not linked to libXft"
+        ):
+            release_compose.compose_release_source(
+                release_id="candidate-1",
+                release_root=self.formal,
+                baseline_release="base-1",
+                output_root=self.output,
+                source_entries=self.sources,
+                maf_entries=self.mafs,
+                python_runtime=runtime,
+                api=self.api,
+            )
+
     def test_formal_maf_map_covers_audio_and_split_application_packages(self) -> None:
         self.assertNotIn("msys-apps", release_compose.MAF_ENTRY_PACKAGE_IDS)
         self.assertEqual(

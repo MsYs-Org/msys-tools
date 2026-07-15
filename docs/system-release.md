@@ -89,6 +89,7 @@ package id is fixed to its destination entry:
 ```powershell
 python -m msys_tools.dev release compose 2026.07.13-8-mobile-rc1 `
   --baseline-release 2026.07.13-7-xft-rc1 `
+  --python-runtime /opt/msys-dev/tk-xft-runtime/candidates/VERIFIED_XFT `
   --maf msys-shell-native=/opt/msys-dev/release-inputs/SHELL_NATIVE.maf `
   --maf msys-shell-pyside=/opt/msys-dev/release-inputs/SHELL_PYSIDE.maf `
   --maf msys-x11-session=/opt/msys-dev/release-inputs/X11.maf `
@@ -106,6 +107,14 @@ python -m msys_tools.dev release compose 2026.07.13-8-mobile-rc1 `
 `msys-audio` is a required formal Release entry. Its MAF manifest package id
 must be `org.msys.audio.bluez`; compose rejects a missing audio entry or an
 archive with a different identity.
+
+Use `--python-runtime` when the baseline still contains the stock Tk runtime.
+The path must name the complete target-built Python/Tcl/Tk tree that already
+passed `font-doctor`; compose copies the whole tree and rejects an override
+whose Tk library is not linked to `libXft.so.2`. Omitting the option continues
+to inherit the verified baseline runtime. This is important on the SPI target:
+stock Tk falls back to the X11 `fixed` bitmap font, where Chinese glyphs have
+zero advance and therefore disappear from Settings and other Tk applications.
 
 The result is `/opt/msys-dev/release-sources/RELEASE_ID`. `compose.json`
 records deterministic input and tree digests. Repeating the same compose is

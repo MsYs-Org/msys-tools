@@ -271,6 +271,46 @@ def _copy_source_tree(source: Path, destination: Path, *, label: str) -> None:
     )
 
 
+def _python_runtime(path: Path, *, label: str) -> Path:
+    """Accept only a complete, cache-free Python runtime tree."""
+
+    runtime = _real_directory(path, label=label)
+    python = runtime / "bin" / "python3"
+    try:
+        info = python.stat()
+    except OSError as exc:
+        raise ReleaseComposeError(f"{label} has no bin/python3: {python}") from exc
+    if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
+        raise ReleaseComposeError(f"{label} bin/python3 is not executable: {python}")
+    _reject_python_caches(runtime)
+    return runtime
+
+
+def _xft_python_runtime(path: Path) -> Path:
+    """Validate an explicitly selected runtime before it replaces the baseline.
+
+    The normal compose path keeps the already-verified baseline runtime.  An
+    override is reserved for the target-built Tk/Xft runtime used by Settings
+    and other Tk applications.  Requiring Tk's ELF to name libXft prevents an
+    accidental copy of the stock core-font runtime that renders CJK as empty
+    glyphs on the SPI X server.
+    """
+
+    runtime = _python_runtime(path, label="Python runtime override")
+    tk = runtime / "lib" / "libtcl9tk9.0.so"
+    try:
+        payload = tk.read_bytes()
+    except OSError as exc:
+        raise ReleaseComposeError(
+            f"Python runtime override has no Tk 9 shared library: {tk}"
+        ) from exc
+    if b"libXft.so.2" not in payload:
+        raise ReleaseComposeError(
+            "Python runtime override Tk library is not linked to libXft.so.2"
+        )
+    return runtime
+
+
 def _metadata_digest(document: dict[str, Any]) -> str:
     canonical = json.dumps(
         document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -433,6 +473,7 @@ def compose_release_source(
     output_root: Path,
     source_entries: dict[str, Path],
     maf_entries: dict[str, Path],
+    python_runtime: Path | None = None,
     api: InstallerApi | None = None,
 ) -> dict[str, Any]:
     """Build one immutable, stage-ready source without changing live state."""
@@ -475,9 +516,15 @@ def compose_release_source(
             "verified baseline path does not match the formal release directory: "
             f"{baseline_path}"
         )
-    runtime_python = _real_directory(
+    baseline_runtime = _python_runtime(
         baseline_path / ".runtime" / "python", label="baseline Python runtime"
     )
+    runtime_python = (
+        _xft_python_runtime(python_runtime)
+        if python_runtime is not None
+        else baseline_runtime
+    )
+    runtime_origin = "xft-override" if python_runtime is not None else "baseline"
 
     unresolved_output = Path(output_root).expanduser()
     if not unresolved_output.is_absolute() or unresolved_output == Path(
@@ -534,7 +581,11 @@ def compose_release_source(
             "baseline": {
                 "release_id": baseline_release,
                 "content_sha256": str(baseline["content_sha256"]),
-                "runtime_sha256": _tree_digest(staging / ".runtime"),
+            },
+            "python_runtime": {
+                "origin": runtime_origin,
+                "content_sha256": _tree_digest(staging / ".runtime" / "python"),
+                "xft": python_runtime is not None,
             },
             "entries": list(COMPOSED_ENTRIES),
             "source_entries": source_metadata,
@@ -575,6 +626,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace-root", default="/opt/msys-dev")
     parser.add_argument("--output-root", default="/opt/msys-dev/release-sources")
     parser.add_argument(
+        "--python-runtime",
+        help=(
+            "copy this complete target-built Tk/Xft Python runtime instead of "
+            "inheriting the baseline runtime"
+        ),
+    )
+    parser.add_argument(
         "--entry",
         action="append",
         default=[],
@@ -609,6 +667,7 @@ def main(argv: list[str] | None = None) -> int:
             output_root=Path(args.output_root),
             source_entries=sources,
             maf_entries=mafs,
+            python_runtime=(Path(args.python_runtime) if args.python_runtime else None),
         )
     except (ReleaseComposeError, OSError, ValueError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)

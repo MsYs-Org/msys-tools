@@ -5283,6 +5283,7 @@ def command_release_compose(
     output_root: str,
     entries: list[str],
     mafs: list[str],
+    python_runtime: str | None = None,
 ) -> int:
     root = _normalise_remote_release_root(release_root)
     workspace = _normalise_remote_source_root(workspace_root)
@@ -5302,6 +5303,10 @@ def command_release_compose(
         "--output-root",
         output,
     ]
+    if python_runtime is not None:
+        argv.extend(
+            ["--python-runtime", _normalise_remote_source_root(python_runtime)]
+        )
     for mapping in entries:
         argv.extend(["--entry", _normalise_release_mapping(mapping)])
     for mapping in mafs:
@@ -6696,6 +6701,10 @@ def build_parser() -> argparse.ArgumentParser:
     release_compose.add_argument("--workspace-root")
     release_compose.add_argument("--output-root")
     release_compose.add_argument(
+        "--python-runtime",
+        help="complete target-built Tk/Xft Python runtime to embed in the release",
+    )
+    release_compose.add_argument(
         "--entry",
         action="append",
         default=[],
@@ -7583,6 +7592,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.output_root or f"{remote}/release-sources",
                     args.entry,
                     args.maf,
+                    args.python_runtime,
                 )
             if args.release_command == "stage":
                 if args.restart_service and not args.activate:

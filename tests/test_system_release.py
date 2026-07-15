@@ -84,6 +84,7 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
                     "msys-shell-native=/opt/input/shell.maf",
                     "msys-audio=/opt/input/audio.maf",
                 ],
+                "/opt/msys-dev/tk-xft-runtime/candidates/verified-xft",
             )
         self.assertEqual(result, 0)
         command = capture.call_args.args[1]
@@ -91,6 +92,11 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
         self.assertIn("'/opt/msys-dev/.runtime/python/bin/python3' '-B'", command)
         self.assertIn("'msys_tools.release_compose'", command)
         self.assertIn("'--baseline-release' 'base-1'", command)
+        self.assertIn(
+            "'--python-runtime' "
+            "'/opt/msys-dev/tk-xft-runtime/candidates/verified-xft'",
+            command,
+        )
         self.assertIn("'msys-core=/opt/final/core'", command)
         self.assertIn("'msys-shell-native=/opt/input/shell.maf'", command)
         self.assertIn("'msys-audio=/opt/input/audio.maf'", command)
