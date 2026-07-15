@@ -329,6 +329,7 @@ def run_p0_ui_acceptance(
     cleanup: list[dict[str, Any]] = []
     original_running: set[str] = set()
     original_foreground: list[str] = []
+    original_foreground_manual: set[str] = set()
     started: set[str] = set()
     mutated = toast_pending = False
     restored = True
@@ -409,6 +410,11 @@ def run_p0_ui_acceptance(
             )
             if isinstance(item.get("component"), str)
         ]
+        original_foreground_manual = {
+            component
+            for component in original_foreground
+            if descriptors.get(component, {}).get("lifecycle") == "manual"
+        }
         before_windows = windows("preflight.windows")
         visible_overlays = [
             str(item.get("role") or item.get("title") or item.get("id"))
@@ -703,9 +709,10 @@ def run_p0_ui_acceptance(
                 clean("role:window-manager", "home", {}, "cleanup.home")
             try:
                 after = _running_manual(inventory("cleanup.after"))
-                if after != original_running:
+                expected_after = original_running | original_foreground_manual
+                if after != expected_after:
                     cleanup_errors.append(
-                        f"manual set mismatch: before={sorted(original_running)} "
+                        f"manual set mismatch: expected={sorted(expected_after)} "
                         f"after={sorted(after)}"
                     )
             except (OSError, RuntimeError, ValueError) as exc:

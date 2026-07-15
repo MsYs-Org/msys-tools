@@ -30,6 +30,7 @@ class FakeP0Runtime:
         self,
         *,
         initially_running: set[str] | None = None,
+        initial_foreground: list[str] | None = None,
         input_method_component: str | None = None,
     ) -> None:
         self.identities = {
@@ -38,12 +39,20 @@ class FakeP0Runtime:
             "org.msys.apps:device-info": "org.msys.apps.device-info",
             "org.msys.settings:main": "org.msys.settings",
         }
-        self.running = set(initially_running or {"org.msys.settings:main"})
-        self.foreground = [
-            component
-            for component in ("org.msys.settings:main", *DEFAULT_COMPONENTS)
-            if component in self.running
-        ]
+        self.running = set(
+            {"org.msys.settings:main"}
+            if initially_running is None
+            else initially_running
+        )
+        self.foreground = (
+            list(initial_foreground)
+            if initial_foreground is not None
+            else [
+                component
+                for component in ("org.msys.settings:main", *DEFAULT_COMPONENTS)
+                if component in self.running
+            ]
+        )
         self.task_visible = False
         self.toast_visible = False
         self.input_method_component = input_method_component
@@ -317,6 +326,62 @@ class P0UIAcceptanceTests(unittest.TestCase):
         )
         self.assertFalse(document["dirty_stats"]["available"])
         self.assertTrue(document["dirty_stats"]["evidence_only"])
+
+    def test_foreground_manual_missing_from_running_snapshot_is_not_a_false_failure(self) -> None:
+        runtime = FakeP0Runtime(
+            initially_running=set(),
+            initial_foreground=["org.msys.settings:main"],
+        )
+
+        status, document = run_p0_ui_acceptance(
+            "/tmp/msys-main",
+            rpc_call=runtime,
+            sleep=runtime.sleep,
+            thumbnail_probe=fake_thumbnail,
+            memory_probe=fake_memory,
+            display_log="/missing/old-sink.log",
+        )
+
+        self.assertEqual(status, 0)
+        self.assertTrue(document["restored"])
+        self.assertEqual(document["baseline"]["manual_running"], [])
+        self.assertEqual(
+            document["baseline"]["foreground"],
+            ["org.msys.settings:main"],
+        )
+        self.assertEqual(runtime.running, {"org.msys.settings:main"})
+        self.assertEqual(runtime.foreground, ["org.msys.settings:main"])
+
+    def test_cleanup_still_rejects_a_truly_extra_manual_application(self) -> None:
+        runtime = FakeP0Runtime()
+        extra = "org.example:extra"
+        runtime.identities[extra] = "org.example.extra"
+
+        def inject_extra(
+            runtime_dir: str,
+            target: str,
+            method: str,
+            payload: dict,
+            **kwargs: object,
+        ) -> dict:
+            result = runtime(runtime_dir, target, method, payload, **kwargs)
+            if target == "role:task-switcher" and method == "hide":
+                runtime.running.add(extra)
+            return result
+
+        status, document = run_p0_ui_acceptance(
+            "/tmp/msys-main",
+            rpc_call=inject_extra,
+            sleep=runtime.sleep,
+            thumbnail_probe=fake_thumbnail,
+            memory_probe=fake_memory,
+            display_log="/missing/old-sink.log",
+        )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(document["restored"])
+        self.assertIn(extra, runtime.running)
+        self.assertIn("manual set mismatch", document["error"])
 
     def test_back_hides_input_method_then_closes_application(self) -> None:
         runtime = FakeP0Runtime(input_method_component=DEFAULT_COMPONENTS[2])
