@@ -7,6 +7,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ ROLE_FALLBACK_IDENTITIES = {
         "org.msys.shell.navigation-pill",
     ),
 }
+NATIVE_ID_PATTERN = re.compile(r"^0x[0-9a-fA-F]+$")
 
 
 class X11DebugError(ValueError):
@@ -133,17 +135,12 @@ def native_arguments(args: argparse.Namespace) -> list[str]:
     ]
 
 
-def _role_identity_candidates(
+def _native_window_list(
     binary: Path,
-    role: str,
     environment: dict[str, str],
-) -> tuple[str, ...]:
-    """Resolve a visible role through X11 policy, with a bounded old-helper fallback."""
+) -> list[dict[str, Any]] | None:
+    """Return one bounded native top-level snapshot, or None for old helpers."""
 
-    role = _bounded_text(role, "role", 64)
-    fallback = ROLE_FALLBACK_IDENTITIES.get(role)
-    if fallback is None:
-        raise X11DebugError(f"unsupported window role: {role}")
     try:
         completed = subprocess.run(
             [str(binary), "--list-windows"],
@@ -153,23 +150,42 @@ def _role_identity_candidates(
             env=environment,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return fallback
+        return None
     output = completed.stdout
     if (
         completed.returncode != 0
         or not isinstance(output, str)
         or len(output.encode("utf-8", errors="replace")) > WINDOW_LIST_MAX_BYTES
     ):
-        return fallback
+        return None
     try:
         document: Any = json.loads(output)
     except json.JSONDecodeError:
-        return fallback
+        return None
     if not isinstance(document, dict) or document.get("schema") != "msys.window-list.v1":
-        return fallback
+        return None
     windows = document.get("windows")
     if not isinstance(windows, list) or len(windows) > WINDOW_LIST_MAX_WINDOWS:
         raise X11DebugError("native window list is malformed or exceeds its bound")
+    return [dict(window) for window in windows if isinstance(window, dict)]
+
+
+def _role_identity_candidates(
+    binary: Path,
+    role: str,
+    environment: dict[str, str],
+    windows: list[dict[str, Any]] | None = None,
+) -> tuple[str, ...]:
+    """Resolve a visible role through X11 policy, with a bounded old-helper fallback."""
+
+    role = _bounded_text(role, "role", 64)
+    fallback = ROLE_FALLBACK_IDENTITIES.get(role)
+    if fallback is None:
+        raise X11DebugError(f"unsupported window role: {role}")
+    if windows is None:
+        windows = _native_window_list(binary, environment)
+    if windows is None:
+        return fallback
 
     candidates: list[str] = []
     for window in windows:
@@ -199,6 +215,7 @@ def native_argument_candidates(
     args: argparse.Namespace,
     binary: Path,
     environment: dict[str, str],
+    windows: list[dict[str, Any]] | None = None,
 ) -> tuple[list[str], ...]:
     role_value = getattr(args, "role", None)
     if role_value is None:
@@ -209,7 +226,9 @@ def native_argument_candidates(
         or getattr(args, "window", None) is not None
     ):
         raise X11DebugError("--role cannot be combined with --identity, --title, or --window")
-    candidates = _role_identity_candidates(binary, str(role_value), environment)
+    candidates = _role_identity_candidates(
+        binary, str(role_value), environment, windows
+    )
     commands: list[list[str]] = []
     for identity in candidates:
         resolved = argparse.Namespace(**vars(args))
@@ -217,6 +236,64 @@ def native_argument_candidates(
         resolved.identity = identity
         commands.append(native_arguments(resolved))
     return tuple(commands)
+
+
+def _injection_target(
+    args: argparse.Namespace,
+    windows: list[dict[str, Any]] | None,
+) -> str | None:
+    """Resolve the exact visible native XID before injection."""
+
+    if windows is None:
+        return None
+    window_selector = getattr(args, "window", None)
+    identity = getattr(args, "identity", None)
+    title = getattr(args, "title", None)
+    if window_selector is not None:
+        identity, title = window_selector
+    role = getattr(args, "role", None)
+    for window in windows:
+        if window.get("state") != "visible":
+            continue
+        if role is not None and window.get("role") != role:
+            continue
+        if identity is not None and window.get("identity") != identity:
+            continue
+        if title is not None and window.get("title") != title:
+            continue
+        native_id = window.get("native_id")
+        if (
+            not isinstance(native_id, str)
+            or NATIVE_ID_PATTERN.fullmatch(native_id) is None
+        ):
+            raise X11DebugError("resolved gesture target has no valid native XID")
+        return native_id
+    selector = role or identity or title or window_selector
+    raise X11DebugError(f"no visible X11 gesture target matches {selector!r}")
+
+
+def _target_transitioned(
+    native_id: str | None,
+    windows: list[dict[str, Any]] | None,
+) -> bool:
+    if native_id is None or windows is None:
+        return False
+    current = next(
+        (window for window in windows if window.get("native_id") == native_id),
+        None,
+    )
+    return current is None or current.get("state") != "visible"
+
+
+def _emit_process_output(completed: subprocess.CompletedProcess[str]) -> None:
+    if completed.stdout:
+        print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n")
+    if completed.stderr:
+        print(
+            completed.stderr,
+            end="" if completed.stderr.endswith("\n") else "\n",
+            file=sys.stderr,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -256,16 +333,44 @@ def main(argv: list[str] | None = None) -> int:
         if not os.access(binary, os.X_OK):
             raise X11DebugError(f"native policy helper is not executable: {binary}")
         environment = {**os.environ, "DISPLAY": display}
-        commands = native_argument_candidates(args, binary, environment)
+        windows = _native_window_list(binary, environment)
+        target_xid = _injection_target(args, windows)
+        commands = native_argument_candidates(args, binary, environment, windows)
         result = 3
+        final_completed: subprocess.CompletedProcess[str] | None = None
+        transition_limit = 1.0 + (
+            int(args.duration_ms) / 1000 if args.gesture == "swipe" else 0.05
+        )
         for command_arguments in commands:
+            started = time.monotonic()
             completed = subprocess.run(
                 [str(binary), *command_arguments],
                 env=environment,
+                capture_output=True,
+                text=True,
             )
+            final_completed = completed
             result = int(completed.returncode)
+            if result == 3 and time.monotonic() - started <= transition_limit:
+                after = _native_window_list(binary, environment)
+                if _target_transitioned(target_xid, after):
+                    print(
+                        json.dumps(
+                            {
+                                "schema": "msys.x11-debug-result.v1",
+                                "ok": True,
+                                "result": "injection-success",
+                                "target_state": "target-transitioned",
+                                "native_id": target_xid,
+                            },
+                            sort_keys=True,
+                        )
+                    )
+                    return 0
             if result != 3:
                 break
+        if final_completed is not None:
+            _emit_process_output(final_completed)
         return result
     except X11DebugError as exc:
         print(f"msys-x11-debug: {exc}", file=sys.stderr)

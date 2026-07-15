@@ -474,6 +474,9 @@ session document is unavailable. With no selector, both `tap` and `swipe`
 resolve the visible `_MSYS_WINDOW_ROLE=navigation-bar` window, so changing the
 selected shell provider does not require changing the debug command. An
 explicit `--identity`, `--title`, or `--window` selector bypasses that default.
+The wrapper pins the pre-injection native XID, so a gesture that hides its own
+Overview/overlay can return `injection-success/target-transitioned` instead of
+a false `target not found`; a target that remains visible still fails.
 
 ## Screenshot and semantic visual smoke debugging
 

@@ -612,6 +612,12 @@ wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev swipe 1
 selector. Selector text, coordinates, duration, and recovery `DISPLAY` are
 validated locally before the multiplexed SSH connection is used.
 
+Before injection, the remote wrapper records the visible target's native XID.
+If a successful press/release or swipe intentionally hides that same window,
+an old helper's trailing `target not found` is reported as
+`injection-success/target-transitioned`. A still-visible target remains a real
+failure; the wrapper does not mask selector errors or the helper's lookup timeout.
+
 Stable X11 window handles can be inspected and controlled without hand-writing
 JSON in PowerShell. `wm list` returns `msys.window.v1` records; copy an exact
 `msys.x11-window.v1:...` id into one of the typed actions:

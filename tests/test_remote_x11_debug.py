@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -16,6 +18,26 @@ from msys_tools.remote_x11_debug import (
     native_arguments,
     resolve_display,
 )
+
+
+def window_snapshot(*, state: str = "visible", include_target: bool = True):
+    windows = []
+    if include_target:
+        windows.append(
+            {
+                "native_id": "0x40",
+                "identity": "org.msys.shell.task-switcher",
+                "title": "MSYS Recents",
+                "role": "task-switcher",
+                "state": state,
+            }
+        )
+    return subprocess.CompletedProcess(
+        [],
+        0,
+        json.dumps({"schema": "msys.window-list.v1", "windows": windows}),
+        "",
+    )
 
 
 class DisplayResolutionTests(unittest.TestCase):
@@ -169,10 +191,11 @@ class NativeArgumentsTests(unittest.TestCase):
             binary = root / "msys-x11-policy"
             binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             binary.chmod(binary.stat().st_mode | 0o100)
-            completed = subprocess.CompletedProcess([], 23)
+            unsupported = subprocess.CompletedProcess([], 64, "", "usage")
+            completed = subprocess.CompletedProcess([], 23, "", "")
             with mock.patch(
                 "msys_tools.remote_x11_debug.subprocess.run",
-                return_value=completed,
+                side_effect=[unsupported, completed],
             ) as run:
                 result = main(
                     [
@@ -195,10 +218,13 @@ class NativeArgumentsTests(unittest.TestCase):
                 )
 
         self.assertEqual(result, 23)
-        self.assertEqual(run.call_count, 1)
-        self.assertEqual(run.call_args.args[0][0], str(binary))
-        self.assertEqual(run.call_args.kwargs["env"]["DISPLAY"], ":77")
-        self.assertEqual(run.call_args.kwargs["env"].get("PATH"), os.environ.get("PATH"))
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[1].args[0][0], str(binary))
+        self.assertEqual(run.call_args_list[1].kwargs["env"]["DISPLAY"], ":77")
+        self.assertEqual(
+            run.call_args_list[1].kwargs["env"].get("PATH"),
+            os.environ.get("PATH"),
+        )
 
     def test_role_resolver_uses_the_visible_native_navigation_window(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -214,16 +240,19 @@ class NativeArgumentsTests(unittest.TestCase):
                         "schema": "msys.window-list.v1",
                         "windows": [
                             {
+                                "native_id": "0x30",
                                 "identity": "org.example.foreground",
                                 "role": "application",
                                 "state": "visible",
                             },
                             {
+                                "native_id": "0x40",
                                 "identity": "org.msys.shell.native.navigation-pill",
                                 "role": "navigation-bar",
                                 "state": "visible",
                             },
                             {
+                                "native_id": "0x41",
                                 "identity": "org.msys.shell.navigation",
                                 "role": "navigation-bar",
                                 "state": "hidden",
@@ -317,6 +346,107 @@ class NativeArgumentsTests(unittest.TestCase):
                 ],
             ),
         )
+
+    def test_tap_and_swipe_accept_a_pinned_target_transition(self) -> None:
+        gestures = (
+            ["tap", "280", "30", "--identity", "org.msys.shell.task-switcher"],
+            [
+                "swipe",
+                "160",
+                "200",
+                "160",
+                "20",
+                "--duration-ms",
+                "220",
+                "--identity",
+                "org.msys.shell.task-switcher",
+            ],
+        )
+        for gesture in gestures:
+            with self.subTest(gesture=gesture[0]), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                binary = root / "msys-x11-policy"
+                binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                binary.chmod(binary.stat().st_mode | 0o100)
+                injection = subprocess.CompletedProcess(
+                    [], 3, "", "click target not found\n"
+                )
+                output, error = io.StringIO(), io.StringIO()
+                with (
+                    mock.patch(
+                        "msys_tools.remote_x11_debug.subprocess.run",
+                        side_effect=[
+                            window_snapshot(),
+                            injection,
+                            window_snapshot(state="hidden"),
+                        ],
+                    ) as run,
+                    mock.patch(
+                        "msys_tools.remote_x11_debug.time.monotonic",
+                        side_effect=[10.0, 10.1],
+                    ),
+                    redirect_stdout(output),
+                    redirect_stderr(error),
+                ):
+                    result = main(
+                        [
+                            "--runtime-dir",
+                            str(root),
+                            "--binary",
+                            str(binary),
+                            "--display",
+                            ":24",
+                            *gesture,
+                        ]
+                    )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(run.call_count, 3)
+            document = json.loads(output.getvalue())
+            self.assertEqual(document["result"], "injection-success")
+            self.assertEqual(document["target_state"], "target-transitioned")
+            self.assertEqual(document["native_id"], "0x40")
+            self.assertEqual(error.getvalue(), "")
+
+    def test_native_not_found_remains_failure_when_pinned_target_is_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "msys-x11-policy"
+            binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            binary.chmod(binary.stat().st_mode | 0o100)
+            injection = subprocess.CompletedProcess(
+                [], 3, "", "click target not found\n"
+            )
+            error = io.StringIO()
+            with (
+                mock.patch(
+                    "msys_tools.remote_x11_debug.subprocess.run",
+                    side_effect=[window_snapshot(), injection, window_snapshot()],
+                ),
+                mock.patch(
+                    "msys_tools.remote_x11_debug.time.monotonic",
+                    side_effect=[10.0, 10.1],
+                ),
+                redirect_stderr(error),
+            ):
+                result = main(
+                    [
+                        "--runtime-dir",
+                        str(root),
+                        "--binary",
+                        str(binary),
+                        "--display",
+                        ":24",
+                        "tap",
+                        "280",
+                        "30",
+                        "--identity",
+                        "org.msys.shell.task-switcher",
+                    ]
+                )
+
+        self.assertEqual(result, 3)
+        self.assertIn("click target not found", error.getvalue())
 
     def test_old_policy_fallback_is_bounded_to_known_navigation_identities(self) -> None:
         args = argparse.Namespace(
