@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -137,6 +138,125 @@ class AppFlowTests(unittest.TestCase):
                 self.assertIn("tk.Scrollbar", main_source)
                 self.assertIn("tk.Canvas", main_source)
                 self.assertIn("wraplength", main_source)
+
+    def test_all_templates_serve_the_application_back_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for template in TEMPLATES:
+                with self.subTest(template=template):
+                    destination = root / template
+                    create_app(
+                        WORKSPACE,
+                        destination,
+                        template=template,
+                        package_id=f"org.example.back-{template}",
+                    )
+                    manifest = json.loads(
+                        (destination / "manifest.json").read_text(encoding="utf-8")
+                    )
+                    component = manifest["components"][0]
+                    self.assertEqual(component["readiness"]["mode"], "mipc-ready")
+                    self.assertEqual(
+                        component["provides"],
+                        [
+                            {
+                                "interface": "org.msys.application-navigation.v1",
+                                "exclusive": False,
+                                "priority": 100,
+                            }
+                        ],
+                    )
+                    readme = (destination / "README.md").read_text(encoding="utf-8")
+                    self.assertIn("org.msys.application-navigation.v1", readme)
+                    self.assertIn('navigation_back', readme)
+                    self.assertIn('{"handled":false}', readme)
+
+                    if template in {"python", "tk"}:
+                        source = (destination / "files/app/main.py").read_text(
+                            encoding="utf-8"
+                        )
+                        self.assertIn(
+                            "from msys_sdk import ComponentChannel, application_navigation_handler",
+                            source,
+                        )
+                        self.assertIn("channel.handshake()", source)
+                        self.assertIn("call_handler=application_navigation_handler", source)
+                        self.assertIn("def navigate_back() -> bool:", source)
+                        self.assertIn("return False", source)
+                    elif template in {"c", "cpp"}:
+                        suffix = "cpp" if template == "cpp" else "c"
+                        source = (destination / f"src/main.{suffix}").read_text(
+                            encoding="utf-8"
+                        )
+                        makefile = (destination / "Makefile").read_text(encoding="utf-8")
+                        self.assertIn("#include <msys/mipc.h>", source)
+                        self.assertIn("MSYS_NAVIGATION_BACK_METHOD", source)
+                        self.assertIn("msys_mipc_send_navigation_back_result", source)
+                        self.assertIn("static int navigate_back(void)", source)
+                        self.assertIn("return 0;", source)
+                        self.assertIn("MSYS_SDK ?= ../msys-sdk", makefile)
+                        self.assertIn("$(MSYS_SDK)/src/mipc.c", makefile)
+                    elif template == "qt":
+                        source = (destination / "src/main.cpp").read_text(encoding="utf-8")
+                        cmake = (destination / "CMakeLists.txt").read_text(encoding="utf-8")
+                        self.assertIn("QSocketNotifier", source)
+                        self.assertIn("MSYS_NAVIGATION_BACK_METHOD", source)
+                        self.assertIn("static int navigate_back(void)", source)
+                        self.assertIn("MSYS_SDK_ROOT", cmake)
+                        self.assertIn("src/mipc.c", cmake)
+                    else:
+                        source = (destination / "files/app/main.js").read_text(
+                            encoding="utf-8"
+                        )
+                        self.assertEqual(
+                            component["exec"][:5],
+                            [
+                                "python",
+                                "-m",
+                                "msys_sdk.stdio_bridge",
+                                "--",
+                                "@package/files/runtime/electron/electron",
+                            ],
+                        )
+                        self.assertIn('message.method === "navigation_back"', source)
+                        self.assertIn("function navigateBack()", source)
+                        self.assertIn("return false;", source)
+                        self.assertIn('send({ type: "hello", component, generation })', source)
+
+    @unittest.skipUnless(
+        os.name == "posix"
+        and shutil.which("make") is not None
+        and shutil.which("cc") is not None
+        and shutil.which("c++") is not None
+        and Path("/usr/include/X11/Xlib.h").is_file(),
+        "requires a POSIX C/C++ toolchain with X11 headers",
+    )
+    def test_native_back_templates_build_against_the_public_sdk(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for template in ("c", "cpp"):
+                with self.subTest(template=template):
+                    destination = root / template
+                    create_app(
+                        WORKSPACE,
+                        destination,
+                        template=template,
+                        package_id=f"org.example.build-{template}",
+                    )
+                    subprocess.run(
+                        [
+                            "make",
+                            "CC=cc",
+                            "CXX=c++",
+                            f"MSYS_SDK={WORKSPACE / 'msys-sdk'}",
+                        ],
+                        cwd=destination,
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    self.assertTrue((destination / "files/bin/app").is_file())
 
     def test_python_i18n_merges_parent_and_partial_locale_overlays(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

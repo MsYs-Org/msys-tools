@@ -94,6 +94,10 @@ def _manifest(
     else:
         runtime = "electron"
         command = [
+            "python",
+            "-m",
+            "msys_sdk.stdio_bridge",
+            "--",
             "@package/files/runtime/electron/electron",
             "--no-sandbox",
             "@package/files/app",
@@ -108,7 +112,14 @@ def _manifest(
         "exec": command,
         "lifecycle": "manual",
         "restart": "never",
-        "readiness": {"mode": "exec", "timeout_ms": timeout},
+        "readiness": {"mode": "mipc-ready", "timeout_ms": timeout},
+        "provides": [
+            {
+                "interface": "org.msys.application-navigation.v1",
+                "exclusive": False,
+                "priority": 100,
+            }
+        ],
         "isolation": "baseline",
         "windowing": {
             "system": "x11",
@@ -368,6 +379,8 @@ def _python_main(package_id: str, component: str) -> str:
 import os
 import tkinter as tk
 
+from msys_sdk import ComponentChannel, application_navigation_handler
+
 from i18n import load_messages
 from ui_fonts import configure_tk_fonts, font_spec
 
@@ -473,6 +486,26 @@ page.bind("<Configure>", update_scroll_region)
 root.bind_all("<MouseWheel>", wheel_scroll)
 root.bind_all("<Button-4>", wheel_scroll)
 root.bind_all("<Button-5>", wheel_scroll)
+
+
+def navigate_back() -> bool:
+    """Consume Back inside the app; replace this when adding nested pages."""
+
+    return False
+
+
+def on_component_message(message: dict[str, object]) -> None:
+    if message.get("type") in {{"shutdown", "eof"}}:
+        root.after(0, root.destroy)
+
+
+channel = ComponentChannel.from_environment()
+if channel is not None:
+    channel.handshake()
+    channel.start(
+        on_component_message,
+        call_handler=application_navigation_handler(navigate_back),
+    )
 
 root.mainloop()
 '''
@@ -703,22 +736,91 @@ target.write_text(header, encoding="ascii")
 '''
 
 
+NATIVE_MIPC_SUPPORT = r'''static int navigate_back(void)
+{
+    /* Root-page default. Replace this function when adding nested pages. */
+    return 0;
+}
+
+static int start_component_channel(msys_mipc_client *client, char *packet)
+{
+    char type[32];
+    int result = msys_mipc_client_from_env(client);
+    if (result == MSYS_MIPC_OK)
+        result = msys_mipc_send_hello_from_env(client);
+    if (result == MSYS_MIPC_OK)
+        result = msys_mipc_recv_json(
+            client, packet, MSYS_MIPC_RECV_CAPACITY, 3000, NULL);
+    if (result == MSYS_MIPC_OK)
+        result = msys_mipc_json_get_string(
+            packet, "type", type, sizeof(type), NULL);
+    if (result == MSYS_MIPC_OK && strcmp(type, "welcome") != 0)
+        result = MSYS_MIPC_INVALID_JSON;
+    if (result == MSYS_MIPC_OK)
+        result = msys_mipc_send_ready(client);
+    return result;
+}
+
+static int handle_component_channel(msys_mipc_client *client, char *packet)
+{
+    char type[32];
+    char method[96];
+    uint64_t request_id;
+    int result = msys_mipc_recv_json(
+        client, packet, MSYS_MIPC_RECV_CAPACITY, 0, NULL);
+    if (result == MSYS_MIPC_EOF) return 0;
+    if (result != MSYS_MIPC_OK) return -1;
+    if (msys_mipc_json_get_string(
+            packet, "type", type, sizeof(type), NULL) != MSYS_MIPC_OK)
+        return 1;
+    if (strcmp(type, "shutdown") == 0) return 0;
+    if (strcmp(type, "call") != 0) return 1;
+    if (msys_mipc_json_get_u64(packet, "id", &request_id) != MSYS_MIPC_OK ||
+        msys_mipc_json_get_string(
+            packet, "method", method, sizeof(method), NULL) != MSYS_MIPC_OK)
+        return 1;
+    if (strcmp(method, MSYS_NAVIGATION_BACK_METHOD) == 0)
+        result = msys_mipc_send_navigation_back_result(
+            client, request_id, navigate_back());
+    else
+        result = msys_mipc_send_error(
+            client, request_id, "NO_METHOD", method);
+    return result == MSYS_MIPC_OK ? 1 : -1;
+}
+'''
+
+
 def _native_source(package_id: str, component: str, *, cpp: bool) -> str:
     instance = json.dumps(component)
     app_id = json.dumps(package_id)
     if not cpp:
         return f'''#include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <errno.h>
+#include <poll.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include <msys/mipc.h>
 #include "i18n_catalog.h"
+
+{NATIVE_MIPC_SUPPORT}
 
 int main(void) {{
     Display *display = XOpenDisplay(NULL);
+    msys_mipc_client client;
+    char *packet;
+    int running = 1;
     if (!display) {{
         fputs("cannot open inherited X11 display\\n", stderr);
         return 2;
+    }}
+    packet = (char *)malloc(MSYS_MIPC_RECV_CAPACITY);
+    if (packet == NULL) {{
+        XCloseDisplay(display);
+        return 3;
     }}
     int screen = DefaultScreen(display);
     Window window = XCreateSimpleWindow(
@@ -731,18 +833,42 @@ int main(void) {{
     XSetWMProtocols(display, window, &close_atom, 1);
     XSelectInput(display, window, ExposureMask | StructureNotifyMask);
     XMapWindow(display, window);
-    for (;;) {{
-        XEvent event;
-        XNextEvent(display, &event);
-        if (event.type == Expose) {{
-            const char *message = msys_text_app_message();
-            XDrawString(display, window, DefaultGC(display, screen), 24, 64,
-                        message, (int)strlen(message));
-        }} else if (event.type == ClientMessage &&
-                   (Atom)event.xclient.data.l[0] == close_atom) {{
+    if (start_component_channel(&client, packet) != MSYS_MIPC_OK) {{
+        fputs("cannot initialize inherited MSYS component channel\\n", stderr);
+        free(packet);
+        XDestroyWindow(display, window);
+        XCloseDisplay(display);
+        return 3;
+    }}
+    while (running) {{
+        struct pollfd descriptors[2] = {{
+            {{ConnectionNumber(display), POLLIN, 0}},
+            {{msys_mipc_client_fd(&client), POLLIN, 0}},
+        }};
+        int polled = poll(descriptors, 2, -1);
+        if (polled < 0) {{
+            if (errno == EINTR) continue;
             break;
         }}
+        if (descriptors[1].revents & (POLLIN | POLLHUP | POLLERR)) {{
+            int active = handle_component_channel(&client, packet);
+            if (active <= 0) running = 0;
+        }}
+        while (running && XPending(display)) {{
+            XEvent event;
+            XNextEvent(display, &event);
+            if (event.type == Expose) {{
+                const char *message = msys_text_app_message();
+                XDrawString(display, window, DefaultGC(display, screen), 24, 64,
+                            message, (int)strlen(message));
+            }} else if (event.type == ClientMessage &&
+                       (Atom)event.xclient.data.l[0] == close_atom) {{
+                running = 0;
+            }}
+        }}
     }}
+    msys_mipc_client_close(&client);
+    free(packet);
     XDestroyWindow(display, window);
     XCloseDisplay(display);
     return 0;
@@ -750,16 +876,30 @@ int main(void) {{
 '''
     return f'''#include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <poll.h>
 
+#include <msys/mipc.h>
 #include "i18n_catalog.h"
+
+{NATIVE_MIPC_SUPPORT}
 
 int main() {{
     Display *display = XOpenDisplay(nullptr);
+    msys_mipc_client client{{}};
+    char *packet = static_cast<char *>(std::malloc(MSYS_MIPC_RECV_CAPACITY));
+    bool running = true;
     if (!display) {{
         std::cerr << "cannot open inherited X11 display\\n";
         return 2;
+    }}
+    if (packet == nullptr) {{
+        XCloseDisplay(display);
+        return 3;
     }}
     const int screen = DefaultScreen(display);
     Window window = XCreateSimpleWindow(
@@ -772,18 +912,42 @@ int main() {{
     XSetWMProtocols(display, window, &close_atom, 1);
     XSelectInput(display, window, ExposureMask | StructureNotifyMask);
     XMapWindow(display, window);
-    for (;;) {{
-        XEvent event{{}};
-        XNextEvent(display, &event);
-        if (event.type == Expose) {{
-            const char *message = msys_text_app_message();
-            XDrawString(display, window, DefaultGC(display, screen), 24, 64,
-                        message, static_cast<int>(std::strlen(message)));
-        }} else if (event.type == ClientMessage &&
-                   static_cast<Atom>(event.xclient.data.l[0]) == close_atom) {{
+    if (start_component_channel(&client, packet) != MSYS_MIPC_OK) {{
+        std::cerr << "cannot initialize inherited MSYS component channel\\n";
+        std::free(packet);
+        XDestroyWindow(display, window);
+        XCloseDisplay(display);
+        return 3;
+    }}
+    while (running) {{
+        struct pollfd descriptors[2] = {{
+            {{ConnectionNumber(display), POLLIN, 0}},
+            {{msys_mipc_client_fd(&client), POLLIN, 0}},
+        }};
+        const int polled = poll(descriptors, 2, -1);
+        if (polled < 0) {{
+            if (errno == EINTR) continue;
             break;
         }}
+        if (descriptors[1].revents & (POLLIN | POLLHUP | POLLERR)) {{
+            const int active = handle_component_channel(&client, packet);
+            if (active <= 0) running = false;
+        }}
+        while (running && XPending(display)) {{
+            XEvent event{{}};
+            XNextEvent(display, &event);
+            if (event.type == Expose) {{
+                const char *message = msys_text_app_message();
+                XDrawString(display, window, DefaultGC(display, screen), 24, 64,
+                            message, static_cast<int>(std::strlen(message)));
+            }} else if (event.type == ClientMessage &&
+                       static_cast<Atom>(event.xclient.data.l[0]) == close_atom) {{
+                running = false;
+            }}
+        }}
     }}
+    msys_mipc_client_close(&client);
+    std::free(packet);
     XDestroyWindow(display, window);
     XCloseDisplay(display);
     return 0;
@@ -793,19 +957,26 @@ int main() {{
 
 def _makefile(*, cpp: bool) -> str:
     compiler = "CXX" if cpp else "CC"
-    default_compiler = "aarch64-linux-gnu-g++" if cpp else "aarch64-linux-gnu-gcc"
     flags_name = "CXXFLAGS" if cpp else "CFLAGS"
     default_flags = "-O2 -Wall -Wextra -std=c++17" if cpp else "-O2 -Wall -Wextra -std=c11"
     source = "src/main.cpp" if cpp else "src/main.c"
-    return f'''ifeq ($(origin {compiler}), default)
-{compiler} := {default_compiler}
+    cxx_setup = '''ifeq ($(origin CXX), default)
+CXX := aarch64-linux-gnu-g++
 endif
-{flags_name} ?= {default_flags}
+''' if cpp else ""
+    return f'''ifeq ($(origin CC), default)
+CC := aarch64-linux-gnu-gcc
+endif
+{cxx_setup}{flags_name} ?= {default_flags}
 CPPFLAGS ?=
 LDFLAGS ?=
 X11_LIBS ?= -lX11
+MSYS_SDK ?= ../msys-sdk
 TARGET := files/bin/app
 I18N_HEADER := build/i18n_catalog.h
+MIPC_OBJECT := build/msys_mipc.o
+MIPC_HEADER := $(MSYS_SDK)/include/msys/mipc.h
+MIPC_SOURCE := $(MSYS_SDK)/src/mipc.c
 
 .PHONY: all clean
 all: $(TARGET)
@@ -813,9 +984,14 @@ all: $(TARGET)
 $(I18N_HEADER): files/share/i18n/catalog.json tools/compile_i18n.py
 \tpython3 tools/compile_i18n.py $< $@
 
-$(TARGET): {source} $(I18N_HEADER)
+$(MIPC_OBJECT): $(MIPC_SOURCE) $(MIPC_HEADER)
+\tmkdir -p build
+\t$(CC) $(CFLAGS) $(CPPFLAGS) -I$(MSYS_SDK)/include -c $(MIPC_SOURCE) -o $@
+
+$(TARGET): {source} $(I18N_HEADER) $(MIPC_OBJECT)
 \tmkdir -p files/bin
-\t$({compiler}) $({flags_name}) $(CPPFLAGS) -Ibuild $< -o $@ $(LDFLAGS) $(X11_LIBS)
+\t$({compiler}) $({flags_name}) $(CPPFLAGS) -Ibuild -I$(MSYS_SDK)/include $< \\
+\t\t$(MIPC_OBJECT) -o $@ $(LDFLAGS) $(X11_LIBS)
 
 clean:
 \trm -rf build $(TARGET)
@@ -928,10 +1104,17 @@ def _qt_source(package_id: str, name: str) -> str:
 #include <QMainWindow>
 #include <QScrollArea>
 #include <QSizePolicy>
+#include <QSocketNotifier>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
+#include <msys/mipc.h>
 #include "i18n.h"
+
+{NATIVE_MIPC_SUPPORT}
 
 int main(int argc, char **argv) {{
     QApplication app(argc, argv);
@@ -983,19 +1166,44 @@ int main(int argc, char **argv) {{
         "QLabel#title {{ color: #315fbd; font-size: 22px; font-weight: 700; }}"
     );
     window.show();
-    return app.exec();
+    msys_mipc_client channel{{}};
+    char *packet = static_cast<char *>(std::malloc(MSYS_MIPC_RECV_CAPACITY));
+    if (packet == nullptr ||
+        start_component_channel(&channel, packet) != MSYS_MIPC_OK) {{
+        std::free(packet);
+        return 3;
+    }}
+    QSocketNotifier control(msys_mipc_client_fd(&channel), QSocketNotifier::Read);
+    QObject::connect(
+        &control,
+        &QSocketNotifier::activated,
+        [&app, &channel, packet](auto...) {{
+            if (handle_component_channel(&channel, packet) <= 0) app.quit();
+        }}
+    );
+    const int result = app.exec();
+    msys_mipc_client_close(&channel);
+    std::free(packet);
+    return result;
 }}
 '''
 
 
 QT_CMAKE = '''cmake_minimum_required(VERSION 3.16)
-project(msys_app LANGUAGES CXX)
+project(msys_app LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(MSYS_SDK_ROOT "${CMAKE_SOURCE_DIR}/../msys-sdk" CACHE PATH "MSYS SDK source root")
+if(NOT EXISTS "${MSYS_SDK_ROOT}/include/msys/mipc.h" OR
+   NOT EXISTS "${MSYS_SDK_ROOT}/src/mipc.c")
+  message(FATAL_ERROR "Set MSYS_SDK_ROOT to the msys-sdk repository")
+endif()
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
+add_library(msys-mipc STATIC "${MSYS_SDK_ROOT}/src/mipc.c")
+target_include_directories(msys-mipc PUBLIC "${MSYS_SDK_ROOT}/include")
 add_executable(msys-app src/main.cpp)
-target_link_libraries(msys-app PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+target_link_libraries(msys-app PRIVATE Qt${QT_VERSION_MAJOR}::Widgets msys-mipc)
 set_target_properties(msys-app PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/files/bin"
     BUILD_RPATH "$ORIGIN/../runtime/qt/lib"
@@ -1095,11 +1303,74 @@ def _electron_main(package_id: str, name: str) -> str:
     return f'''"use strict";
 
 const {{ app, BrowserWindow }} = require("electron");
+const readline = require("node:readline");
 const {{ loadMessages }} = require("./i18n");
 
 app.setName({json.dumps(package_id)});
 app.commandLine.appendSwitch("class", {json.dumps(package_id)});
 app.commandLine.appendSwitch("disable-lcd-text");
+
+const component = process.env.MSYS_COMPONENT_ID || {json.dumps(package_id + ':main')};
+const generation = Number.parseInt(process.env.MSYS_GENERATION || "0", 10);
+let protocolWelcomed = false;
+let uiReady = false;
+let readySent = false;
+
+function send(message) {{
+  process.stdout.write(`${{JSON.stringify(message)}}\\n`);
+}}
+
+function navigateBack() {{
+  // Root-page default. Replace this function when adding nested pages.
+  return false;
+}}
+
+function maybeReady() {{
+  if (protocolWelcomed && uiReady && !readySent) {{
+    readySent = true;
+    send({{ type: "ready" }});
+  }}
+}}
+
+const protocol = readline.createInterface({{
+  input: process.stdin,
+  crlfDelay: Infinity,
+  terminal: false,
+}});
+
+protocol.on("line", line => {{
+  let message;
+  try {{
+    message = JSON.parse(line);
+  }} catch (error) {{
+    console.error(`invalid mIPC input: ${{error.message}}`);
+    app.quit();
+    return;
+  }}
+  if (message.type === "welcome") {{
+    protocolWelcomed = true;
+    maybeReady();
+  }} else if (message.type === "shutdown" || message.type === "eof") {{
+    app.quit();
+  }} else if (message.type === "call") {{
+    if (message.method === "navigation_back") {{
+      send({{
+        type: "return",
+        id: message.id,
+        payload: {{ handled: navigateBack() === true }},
+      }});
+    }} else {{
+      send({{
+        type: "error",
+        id: message.id,
+        code: "NO_METHOD",
+        message: String(message.method || ""),
+      }});
+    }}
+  }}
+}});
+
+send({{ type: "hello", component, generation }});
 
 function escapeHtml(value) {{
   return String(value).replace(/[&<>"']/g, character => ({{
@@ -1137,6 +1408,8 @@ app.whenReady().then(() => {{
     window.webContents.insertCSS(
       `body {{ font-family: ${{JSON.stringify(uiFont)}}, sans-serif; }}`);
   }}
+  uiReady = true;
+  maybeReady();
 }});
 
 app.on("window-all-closed", () => app.quit());
@@ -1151,8 +1424,8 @@ def _readme(
 ) -> str:
     if template in {"python", "tk"}:
         preparation = '''This starter runs immediately with MSYS's isolated Python runtime.  It uses
-only the standard library (and `_tkinter` for the window), so it does not run
-`pip` or inherit host site-packages.  For a portable third-party release,
+the public `msys_sdk` shipped by MSYS plus the standard library (and `_tkinter`
+for the window), so it does not run `pip` or inherit host site-packages.  For a portable third-party release,
 bundle a Python/Tk runtime under `files/runtime/`, change manifest `exec` to
 that package-owned interpreter, and keep dependencies inside that tree.
 `ui_fonts.py` selects an installed CJK-capable family for Tk named and explicit
@@ -1176,7 +1449,9 @@ into `/usr`.'''
 {make_command}
 ```
 
-Set `CPPFLAGS`, `LDFLAGS` and `X11_LIBS` when your sysroot is non-standard.
+The default `MSYS_SDK=../msys-sdk` reuses the public SDK source without copying
+the protocol into this project. Set `MSYS_SDK=/path/to/msys-sdk`, `CPPFLAGS`,
+`LDFLAGS` and `X11_LIBS` when your workspace or sysroot is non-standard.
 The Makefile does not download anything or invoke a package manager.'''
     elif template == "qt":
         preparation = '''The compiled target must be `files/bin/app`.  Bundle the matching aarch64
@@ -1186,7 +1461,8 @@ fall back to target `/usr` as an implicit deployment step.'''
         build = '''Build against an already-provisioned Qt 5 or Qt 6 cross toolchain:
 
 ```sh
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=/path/to/aarch64-toolchain.cmake
+cmake -S . -B build -DMSYS_SDK_ROOT=/path/to/msys-sdk \
+  -DCMAKE_TOOLCHAIN_FILE=/path/to/aarch64-toolchain.cmake
 cmake --build build
 ```
 
@@ -1196,7 +1472,9 @@ No download or package-manager command is part of this project.'''
         preparation = '''Place a complete matching aarch64 Electron distribution below
 `files/runtime/electron`; its executable must be
 `files/runtime/electron/electron` and executable.  Application JavaScript is
-already under `files/app` and has no npm dependencies.  Do not run npm or a
+already under `files/app` and has no npm dependencies. The manifest uses the
+public `msys_sdk.stdio_bridge`; stdout is therefore reserved for its JSON-lines
+component channel and diagnostics belong on stderr. Do not run npm or a
 target package manager merely to launch this starter.'''
         build = '''There is no JavaScript build step.  Copy an Electron runtime obtained through
 your controlled workstation/runtime pipeline, preserve its licenses and modes,
@@ -1234,6 +1512,16 @@ python3 -m tools.i18n_tool validate /path/to/project/files/share/i18n/catalog.js
 The Tk/Python, Qt, and Electron pages wrap long text and provide vertical
 scrolling at small window sizes without adding a UI service or framework
 dependency.
+
+## Application Back
+
+The component declares `org.msys.application-navigation.v1` and becomes ready
+only after its private mIPC handshake. The generated root page answers
+`navigation_back` with `{{"handled":false}}`, allowing the window manager to
+restore the previous task or Home. When adding nested pages, replace the
+clearly marked `navigate_back` function and return true only after consuming
+Back inside the application. Tk/Qt UI state must be marshalled to the toolkit
+thread; the transport callback itself may run on a component I/O thread.
 
 ## Touch input
 
