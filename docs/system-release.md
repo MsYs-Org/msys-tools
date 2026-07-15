@@ -111,10 +111,12 @@ archive with a different identity.
 Use `--python-runtime` when the baseline still contains the stock Tk runtime.
 The path must name the complete target-built Python/Tcl/Tk tree that already
 passed `font-doctor`; compose copies the whole tree and rejects an override
-whose Tk library is not linked to `libXft.so.2`. Omitting the option continues
-to inherit the verified baseline runtime. This is important on the SPI target:
-stock Tk falls back to the X11 `fixed` bitmap font, where Chinese glyphs have
-zero advance and therefore disappear from Settings and other Tk applications.
+whose Tk library is not linked to `libXft.so.2` or lacks the successful probe
+attestation written by `msys-tk-xft-runtime/scripts/install-target.sh`.
+Omitting the option continues to inherit the verified baseline runtime. This
+is important on the SPI target: stock Tk falls back to the X11 `fixed` bitmap
+font, where Chinese glyphs have zero advance and therefore disappear from
+Settings and other Tk applications.
 
 The result is `/opt/msys-dev/release-sources/RELEASE_ID`. `compose.json`
 records deterministic input and tree digests. Repeating the same compose is

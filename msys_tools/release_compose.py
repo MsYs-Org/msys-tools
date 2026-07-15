@@ -308,6 +308,22 @@ def _xft_python_runtime(path: Path) -> Path:
         raise ReleaseComposeError(
             "Python runtime override Tk library is not linked to libXft.so.2"
         )
+    attestation = runtime / ".msys-tk-xft-runtime.json"
+    try:
+        document = json.loads(attestation.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReleaseComposeError(
+            "Python runtime override has no valid Tk/Xft verification attestation"
+        ) from exc
+    if (
+        not isinstance(document, dict)
+        or document.get("schema") != "msys.tk-xft-runtime.v1"
+        or document.get("xft_backend") != "libXft.so.2"
+        or document.get("font_doctor") != "passed"
+    ):
+        raise ReleaseComposeError(
+            "Python runtime override Tk/Xft verification attestation is unhealthy"
+        )
     return runtime
 
 
