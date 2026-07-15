@@ -44,11 +44,16 @@ For a running immutable SysV release, use `fast`/`q` as the default edit loop:
 
 ```powershell
 .\msys.cmd fast --repo msys-settings
-.\msys.cmd q --repo msys-settings --screenshot .\artifacts\settings.png --force
+.\msys.cmd q --repo msys-settings --screenshot artifacts\settings.png --force
 .\msys.cmd fast --repo msys-settings --deliver
 .\msys.cmd fast --repo my-app --deliver `
   --overlay msys-sdk/msys_sdk=files/app/msys_sdk
 ```
+
+Screenshot output paths belong to the workstation: the Windows wrapper maps
+bare relative, `.\`/`..\`, and drive-absolute forms into WSL paths. An already
+absolute Linux path is preserved, so direct Linux callers keep their existing
+path semantics.
 
 The wrapper automatically starts its loopback-only WSL broker for `fast` and
 reuses it for later calls. Without `--deliver`, the Python command syncs the

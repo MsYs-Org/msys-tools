@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import json
 import os
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -124,6 +127,69 @@ class WindowsShortcutFilesTests(unittest.TestCase):
         self.assertIn('"broker"', source)
         self.assertIn("msys-dev-shell.rc", source)
         self.assertIn("ConvertTo-MsysArgument", source)
+
+    def test_tools_wrapper_maps_only_screenshot_outputs_as_windows_paths(self) -> None:
+        source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("function ConvertTo-MsysScreenshotPath", source)
+        self.assertIn("function ConvertTo-MsysScreenshotArguments", source)
+        self.assertIn(
+            "$pathAwareArgs = @(ConvertTo-MsysScreenshotArguments",
+            source,
+        )
+        self.assertIn("foreach ($argument in $pathAwareArgs)", source)
+
+    def test_screenshot_path_converter_handles_windows_forms_without_touching_payloads(self) -> None:
+        powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell is unavailable")
+
+        source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(encoding="utf-8")
+        functions = source.split("function Test-MsysOption", maxsplit=1)[0]
+        probe = r'''
+$workspace = (Get-Location).Path
+$workspaceWsl = "/custom/msys"
+$absolute = Join-Path $workspace "artifacts\post.png"
+$document = [ordered]@{
+    relative = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "fast" -Arguments @("--repo", "msys-settings", "--screenshot", "artifacts\post.png", "--force") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+    dotRelative = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "q" -Arguments @("--screenshot", ".\artifacts\post.png") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+    forwardRelative = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "quick" -Arguments @("--screenshot=artifacts/post.png") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+    absolute = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "accept" -Arguments @("--screenshot", $absolute) -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+    standalone = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "screenshot" -Arguments @("--target", "root@device", "artifacts\single.png", "--display", ":24") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+    linux = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "fast" -Arguments @("--screenshot", "/tmp/post.png") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+    empty = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "fast" -Arguments @("--screenshot=") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+    explicitEmpty = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "fast" -Arguments @("--screenshot", "") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+    noArguments = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "sync-x11display" -Arguments $null -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+    unrelated = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "call" -Arguments @("role:hal", "set", "--field", "path=artifacts\post.png") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+}
+$document | ConvertTo-Json -Compress -Depth 4
+'''
+        encoded = base64.b64encode((functions + probe).encode("utf-16le")).decode("ascii")
+        completed = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            cwd=WORKSPACE,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        document = json.loads(completed.stdout)
+
+        expected = "/custom/msys/artifacts/post.png"
+        self.assertEqual(document["relative"][3], expected)
+        self.assertEqual(document["dotRelative"][1], expected)
+        self.assertEqual(document["forwardRelative"][0], f"--screenshot={expected}")
+        self.assertEqual(document["absolute"][1], expected)
+        self.assertEqual(document["standalone"][2], "/custom/msys/artifacts/single.png")
+        self.assertEqual(document["linux"][1], "/tmp/post.png")
+        self.assertEqual(document["empty"], ["--screenshot="])
+        self.assertEqual(document["explicitEmpty"], ["--screenshot", ""])
+        self.assertEqual(document["noArguments"], [])
+        self.assertEqual(
+            document["unrelated"],
+            ["role:hal", "set", "--field", r"path=artifacts\post.png"],
+        )
 
     def test_child_action_option_does_not_rebind_the_wrapper_command(self) -> None:
         source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(encoding="utf-8")

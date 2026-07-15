@@ -64,8 +64,12 @@ and recent warning/error lines in one SSH execution:
 .\msys.cmd fast --repo msys-settings
 # From G:\Code\MsYs\msys-settings, q also infers --repo msys-settings:
 .\msys.cmd q
-.\msys.cmd fast --repo msys-settings --screenshot .\artifacts\settings.png --force
+.\msys.cmd fast --repo msys-settings --screenshot artifacts\settings.png --force
 ```
+
+The Windows wrapper resolves bare relative, `.\`/`..\`, and drive-absolute
+screenshot destinations on Windows before entering WSL. Absolute Linux paths
+remain unchanged for direct WSL/Linux use.
 
 For Bluetooth audio work, `audio-debug` (alias `audio-accept`) is the one-step,
 read-only acceptance path. The Windows shortcut starts or reuses the same

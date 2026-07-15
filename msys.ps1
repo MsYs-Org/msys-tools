@@ -114,7 +114,7 @@ function ConvertTo-MsysWslPath {
 }
 
 function ConvertTo-MsysArgument {
-    param([Parameter(Mandatory = $true)][string]$Value)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
 
     # Keep Linux/remote values untouched.  Only unmistakable Windows paths and
     # explicit .\ / ..\ local paths need translation.
@@ -128,6 +128,117 @@ function ConvertTo-MsysArgument {
         return ConvertTo-MsysWslPath ([System.IO.Path]::GetFullPath($Value))
     }
     return $Value
+}
+
+function ConvertTo-MsysScreenshotPath {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value,
+        [Parameter(Mandatory = $true)][string]$WorkspaceWindows,
+        [Parameter(Mandatory = $true)][string]$WorkspaceWsl
+    )
+
+    # A Windows wrapper invocation treats relative screenshot destinations as
+    # workstation paths. Absolute Linux paths remain an explicit escape hatch
+    # for callers that already know the WSL mount layout.
+    if ([string]::IsNullOrEmpty($Value) -or $Value.StartsWith("/")) {
+        return $Value
+    }
+
+    if ($Value -eq "~") {
+        $Value = $HOME
+    } elseif ($Value -match "^~[\\/]") {
+        $Value = Join-Path $HOME $Value.Substring(2)
+    }
+    $full = [System.IO.Path]::GetFullPath($Value)
+
+    # Honour MSYS_WSL_WORKSPACE for paths inside the workspace instead of
+    # assuming that WSL always mounts the drive below /mnt/<drive>.
+    $workspaceFull = [System.IO.Path]::GetFullPath($WorkspaceWindows).TrimEnd("\", "/")
+    $workspacePrefix = $workspaceFull + [System.IO.Path]::DirectorySeparatorChar
+    if ($full.Equals($workspaceFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $WorkspaceWsl.TrimEnd("/")
+    }
+    if ($full.StartsWith($workspacePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $relative = $full.Substring($workspacePrefix.Length).Replace("\", "/")
+        return $WorkspaceWsl.TrimEnd("/") + "/" + $relative
+    }
+    return ConvertTo-MsysWslPath $full
+}
+
+function ConvertTo-MsysScreenshotArguments {
+    param(
+        [Parameter(Mandatory = $true)][string]$CommandName,
+        [string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$WorkspaceWindows,
+        [Parameter(Mandatory = $true)][string]$WorkspaceWsl
+    )
+
+    if ($null -eq $Arguments -or $Arguments.Count -eq 0) {
+        return
+    }
+
+    $result = New-Object System.Collections.Generic.List[string]
+    $lowerCommand = $CommandName.ToLowerInvariant()
+    $screenshotOptionCommands = @(
+        "fast", "q", "quick", "deploy", "audio-debug", "audio-accept", "accept"
+    )
+    if ($lowerCommand -in $screenshotOptionCommands) {
+        for ($index = 0; $index -lt $Arguments.Count; $index++) {
+            $argument = $Arguments[$index]
+            if ($argument -eq "--screenshot") {
+                $result.Add($argument)
+                if ($index + 1 -lt $Arguments.Count -and -not $Arguments[$index + 1].StartsWith("-")) {
+                    $index++
+                    $result.Add((ConvertTo-MsysScreenshotPath -Value $Arguments[$index] -WorkspaceWindows $WorkspaceWindows -WorkspaceWsl $WorkspaceWsl))
+                }
+                continue
+            }
+            if ($argument.StartsWith("--screenshot=")) {
+                $value = $argument.Substring("--screenshot=".Length)
+                $converted = ConvertTo-MsysScreenshotPath -Value $value -WorkspaceWindows $WorkspaceWindows -WorkspaceWsl $WorkspaceWsl
+                $result.Add("--screenshot=" + $converted)
+                continue
+            }
+            $result.Add($argument)
+        }
+        return $result.ToArray()
+    }
+
+    if ($lowerCommand -eq "screenshot") {
+        # Find the sole positional output without rewriting values belonging to
+        # common CLI options. This keeps targets and remote Linux paths intact.
+        $valueOptions = @(
+            "--root", "--target", "--remote", "--display", "--backend",
+            "--timeout", "--runtime-dir"
+        )
+        $expectOptionValue = $false
+        $foundOutput = $false
+        foreach ($argument in $Arguments) {
+            if ($expectOptionValue) {
+                $result.Add($argument)
+                $expectOptionValue = $false
+                continue
+            }
+            if ($argument -in $valueOptions) {
+                $result.Add($argument)
+                $expectOptionValue = $true
+                continue
+            }
+            if ($argument.StartsWith("-")) {
+                $result.Add($argument)
+                continue
+            }
+            if (-not $foundOutput) {
+                $result.Add((ConvertTo-MsysScreenshotPath -Value $argument -WorkspaceWindows $WorkspaceWindows -WorkspaceWsl $WorkspaceWsl))
+                $foundOutput = $true
+                continue
+            }
+            $result.Add($argument)
+        }
+        return $result.ToArray()
+    }
+
+    return [string[]]@($Arguments)
 }
 
 function Test-MsysOption {
@@ -524,8 +635,9 @@ if ($currentWindows.StartsWith($workspacePrefix, [System.StringComparison]::Ordi
     }
 }
 
+$pathAwareArgs = @(ConvertTo-MsysScreenshotArguments -CommandName $Command -Arguments $DevArgs -WorkspaceWindows $workspaceWindows -WorkspaceWsl $workspaceWsl)
 $translatedArgs = @()
-foreach ($argument in $DevArgs) {
+foreach ($argument in $pathAwareArgs) {
     $translatedArgs += ConvertTo-MsysArgument $argument
 }
 
