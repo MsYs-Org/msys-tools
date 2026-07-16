@@ -38,6 +38,8 @@ MSYS native Windows path (no WSL)
   .\msys.cmd --native tail
   .\msys.cmd --native screenshot .\artifacts\home.png
   .\msys.cmd --native components
+  .\msys.cmd --native start org.msys.settings:main-lvgl
+  .\msys.cmd --native stop org.msys.settings:main-lvgl
   .\msys.cmd --native call role:hal list_devices {}
 
 Optional config: $script:ConfigPath
@@ -404,6 +406,13 @@ switch ($commandName) {
     }
     { $_ -in @("tail", "log") } { Invoke-Ssh ("tail -n 200 -f " + (Quote-Sh $script:Config.log_file)); exit 0 }
     { $_ -in @("components", "ps") } { Write-Output (Invoke-RemoteControl -Target "msys.core" -Method "list_components" -Payload @{}); exit 0 }
+    { $_ -in @("start", "stop") } {
+        if ($NativeArgs.Count -ne 1 -or $NativeArgs[0] -notmatch "^[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$") {
+            throw "$commandName syntax: $commandName PACKAGE:COMPONENT"
+        }
+        Write-Output (Invoke-RemoteControl -Target "msys.core" -Method $commandName -Payload @{ component = $NativeArgs[0] } -Timeout 30)
+        exit 0
+    }
     "call" {
         if ($NativeArgs.Count -lt 2 -or $NativeArgs.Count -gt 3) { throw "call syntax: call TARGET METHOD [JSON_OBJECT]" }
         $payload = @{}

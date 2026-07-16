@@ -30,6 +30,7 @@ class WindowsNativePathTests(unittest.TestCase):
         self.assertIn('"msys-settings"', source)
         self.assertIn('"msys-file-manager"', source)
         self.assertIn('"msys-openstick-ch347"', source)
+        self.assertIn('@("start", "stop")', source)
 
     def test_remote_python_disables_bytecode(self) -> None:
         source = (ROOT / "msys-native.ps1").read_text(encoding="utf-8-sig")
