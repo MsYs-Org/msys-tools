@@ -242,6 +242,10 @@ function Get-TargetBuildCommand {
             $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
             return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j2 UI_DIR=$uiQ clean all"
         }
+        "msys-file-manager" {
+            $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
+            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 UI_ROOT=$uiQ SDK_ROOT=$sdkQ clean stage"
+        }
         "msys-openstick-ch347" {
             return "cd $stageQ; chmod 0755 files/x11display/bin/ch347_dirty_usb_sink files/x11display/bin/ch347_st7796_test files/x11display/bin/xdamage_shm_capture scripts/*.sh files/x11display/scripts/*.sh; bash -n scripts/msys_ch347_x11_provider.sh files/x11display/scripts/*.sh"
         }
