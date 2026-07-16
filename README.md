@@ -1,5 +1,11 @@
 # msys-tools
 
+Windows 无 WSL 备用通道：`.\msys.cmd --native sync --repo msys-settings`。
+构建递送并只看一次健康摘要：`.\msys.cmd --native fast --repo msys-settings --deliver`。
+进入板端或跟日志：`.\msys.cmd --native ssh`、`.\msys.cmd --native tail`。
+截图与运行时控制：`.\msys.cmd --native screenshot .\artifacts\home.png`、`.\msys.cmd --native components`。
+默认使用 `%USERPROFILE%\.ssh\msys-dev-windows-ed25519`；`%USERPROFILE%\.config\msys-dev\native-windows.json` 可覆盖配置，不保存密码。
+
 The default workspace sync also carries `msys-openstick-ch347`, the
 self-contained AArch64 CH347 display-output package source. Installing that
 package replaces the development `/root/x11display` fallback under the same
