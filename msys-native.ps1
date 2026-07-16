@@ -33,6 +33,7 @@ function Write-NativeUsage {
 MSYS native Windows path (no WSL)
 
   .\msys.cmd --native sync --repo msys-settings
+  .\msys.cmd --native sync --repo msys-device-info --test --probe
   .\msys.cmd --native deliver --repo msys-settings
   .\msys.cmd --native fast --repo msys-settings --deliver
   .\msys.cmd --native ssh
@@ -46,6 +47,9 @@ MSYS native Windows path (no WSL)
 Optional config: $script:ConfigPath
 JSON keys: target, remote, runtime_dir, state_dir, log_file, display, ssh_key,
 workspace. Passwords are never read or stored.
+
+sync/fast options: --test runs the repository's bounded tests and --probe runs
+its Xvfb probe in the same target build. Neither option runs doctor.
 "@ | Write-Host
 }
 
@@ -230,32 +234,108 @@ function Get-RepoPath {
     return $path
 }
 
+function Get-PythonUnitTestCommand {
+    param([string]$Stage)
+    $pythonPath = $Stage + "/files/app:" + $script:Config.remote + "/msys-sdk"
+    return (
+        "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=" + (Quote-Sh $pythonPath) +
+        " `"`$python`" -B -m unittest discover -s tests -v"
+    )
+}
+
+function Assert-BuildChecksSupported {
+    param([string]$Name, [switch]$RunTest, [switch]$RunProbe)
+    $testRepositories = @(
+        "msys-ui-lvgl", "msys-shell-native", "msys-settings",
+        "msys-file-manager", "msys-touch-calibration", "msys-input-touch",
+        "msys-calculator", "msys-device-info", "msys-notes"
+    )
+    $probeRepositories = @(
+        "msys-ui-lvgl", "msys-shell-native", "msys-settings",
+        "msys-file-manager", "msys-touch-calibration", "msys-input-touch",
+        "msys-device-info"
+    )
+    if ($RunTest -and $Name -notin $testRepositories) {
+        throw "--test is not supported by repository $Name"
+    }
+    if ($RunProbe -and $Name -notin $probeRepositories) {
+        throw "--probe is not supported by repository $Name"
+    }
+}
+
 function Get-TargetBuildCommand {
-    param([string]$Name, [string]$Stage)
+    param(
+        [string]$Name,
+        [string]$Stage,
+        [switch]$RunTest,
+        [switch]$RunProbe
+    )
     $stageQ = Quote-Sh $Stage
     $sdkQ = Quote-Sh ($script:Config.remote + "/msys-sdk")
     switch ($Name) {
         "msys-sdk" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 clean; MAKEFLAGS= MFLAGS= make -j1 CFLAGS='-Os -g0 -DNDEBUG -std=c11 -Wall -Wextra -Wpedantic' all" }
         "msys-core" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 -C native clean; MAKEFLAGS= MFLAGS= make -j1 -C native OPTIMIZE=-Os DEBUG_INFO=-g0 all" }
-        "msys-shell-native" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 SDK_DIR=$sdkQ clean; MAKEFLAGS= MFLAGS= make -j1 SDK_DIR=$sdkQ CFLAGS='-Os -g0 -DNDEBUG -std=c11 -Wall -Wextra -Wpedantic -Werror' all" }
+        "msys-shell-native" {
+            $targets = @("all")
+            if ($RunTest) { $targets += "test" }
+            if ($RunProbe) { $targets += "lvgl-probe" }
+            $targetText = $targets -join " "
+            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 SDK_DIR=$sdkQ clean; MAKEFLAGS= MFLAGS= make -j1 SDK_DIR=$sdkQ CFLAGS='-Os -g0 -DNDEBUG -std=c11 -Wall -Wextra -Wpedantic -Werror' $targetText"
+        }
         "msys-ui-lvgl" {
-            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 clean; MAKEFLAGS= MFLAGS= make -j2 all test stage"
+            $targets = @("stage")
+            if ($RunTest) { $targets += "test" }
+            if ($RunProbe) { $targets += "probe" }
+            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 clean; MAKEFLAGS= MFLAGS= make -j2 $($targets -join ' ')"
         }
         "msys-settings" {
             $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
-            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j2 UI_DIR=$uiQ clean all"
+            $targets = @("all")
+            if ($RunProbe) { $targets += "probe" }
+            $command = "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 UI_DIR=$uiQ clean; MAKEFLAGS= MFLAGS= make -j2 UI_DIR=$uiQ $($targets -join ' ')"
+            if ($RunTest) { $command += "; " + (Get-PythonUnitTestCommand $Stage) }
+            return $command
         }
         "msys-file-manager" {
             $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
-            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 UI_ROOT=$uiQ SDK_ROOT=$sdkQ clean stage"
+            $targets = @("stage")
+            if ($RunTest) { $targets += "test" }
+            if ($RunProbe) { $targets += "probe" }
+            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 UI_ROOT=$uiQ SDK_ROOT=$sdkQ clean; MAKEFLAGS= MFLAGS= make -j1 UI_ROOT=$uiQ SDK_ROOT=$sdkQ $($targets -join ' ')"
         }
         "msys-touch-calibration" {
             $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
-            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j2 UI_DIR=$uiQ clean all"
+            $targets = @("all")
+            if ($RunProbe) { $targets += "probe" }
+            $command = "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 UI_DIR=$uiQ clean; MAKEFLAGS= MFLAGS= make -j2 UI_DIR=$uiQ $($targets -join ' ')"
+            if ($RunTest) { $command += "; " + (Get-PythonUnitTestCommand $Stage) }
+            return $command
         }
         "msys-input-touch" {
             $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
-            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 UI_ROOT=$uiQ SDK_ROOT=$sdkQ clean stage"
+            $targets = @("stage")
+            if ($RunProbe) { $targets += "probe" }
+            $command = "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 UI_ROOT=$uiQ SDK_ROOT=$sdkQ clean; MAKEFLAGS= MFLAGS= make -j1 UI_ROOT=$uiQ SDK_ROOT=$sdkQ $($targets -join ' ')"
+            if ($RunTest) { $command += "; " + (Get-PythonUnitTestCommand $Stage) }
+            return $command
+        }
+        "msys-calculator" {
+            $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
+            $command = "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 UI_DIR=$uiQ clean; MAKEFLAGS= MFLAGS= make -j2 UI_DIR=$uiQ all"
+            if ($RunTest) { $command += "; " + (Get-PythonUnitTestCommand $Stage) }
+            return $command
+        }
+        "msys-device-info" {
+            $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
+            $targets = @("all")
+            if ($RunProbe) { $targets += "probe" }
+            $command = "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 UI_DIR=$uiQ clean; MAKEFLAGS= MFLAGS= make -j2 UI_DIR=$uiQ $($targets -join ' ')"
+            if ($RunTest) { $command += "; " + (Get-PythonUnitTestCommand $Stage) }
+            return $command
+        }
+        "msys-notes" {
+            if ($RunTest) { return "cd $stageQ; " + (Get-PythonUnitTestCommand $Stage) }
+            return ":"
         }
         "msys-openstick-ch347" {
             return "cd $stageQ; chmod 0755 files/x11display/bin/ch347_dirty_usb_sink files/x11display/bin/ch347_st7796_test files/x11display/bin/xdamage_shm_capture scripts/*.sh files/x11display/scripts/*.sh; bash -n scripts/msys_ch347_x11_provider.sh files/x11display/scripts/*.sh"
@@ -277,7 +357,12 @@ function Get-TargetBuildCommand {
 }
 
 function Sync-Repository {
-    param([string]$Name)
+    param(
+        [string]$Name,
+        [switch]$RunTest,
+        [switch]$RunProbe
+    )
+    Assert-BuildChecksSupported -Name $Name -RunTest:$RunTest -RunProbe:$RunProbe
     $repo = Get-RepoPath $Name
     $token = [Guid]::NewGuid().ToString("N")
     $archive = Join-Path ([IO.Path]::GetTempPath()) ("msys-native-" + $Name + "-" + $token + ".tar")
@@ -290,7 +375,7 @@ function Sync-Repository {
         if ($LASTEXITCODE -ne 0) { throw "tar failed with exit status $LASTEXITCODE" }
         & scp.exe @(Get-SshOptions) $archive ("{0}:{1}" -f $script:Config.target, $remoteArchive)
         if ($LASTEXITCODE -ne 0) { throw "scp failed with exit status $LASTEXITCODE" }
-        $build = Get-TargetBuildCommand $Name $stage
+        $build = Get-TargetBuildCommand -Name $Name -Stage $stage -RunTest:$RunTest -RunProbe:$RunProbe
         $remoteCommand = (
             "set -eu; " + (Get-RemotePythonPrelude) + "; archive=" + (Quote-Sh $remoteArchive) + "; stage=" + (Quote-Sh $stage) + "; " +
             "trap 'rm -f `"`$archive`"; rm -rf `"`$stage`"' EXIT HUP INT TERM; " +
@@ -401,7 +486,12 @@ $commandName = $Command.ToLowerInvariant()
 switch ($commandName) {
     { $_ -in @("help", "-h", "--help") } { Write-NativeUsage; exit 0 }
     "config" { Write-Host "config: $script:ConfigPath"; $script:Config | ConvertTo-Json -Depth 3; exit 0 }
-    "sync" { Sync-Repository (Get-RepoName $NativeArgs); exit 0 }
+    "sync" {
+        Sync-Repository -Name (Get-RepoName $NativeArgs) `
+            -RunTest:($NativeArgs -contains "--test") `
+            -RunProbe:($NativeArgs -contains "--probe")
+        exit 0
+    }
     "deliver" {
         $repo = Get-RepoName $NativeArgs
         Deliver-Repository $repo
@@ -410,7 +500,9 @@ switch ($commandName) {
     }
     { $_ -in @("fast", "q") } {
         $repo = Get-RepoName $NativeArgs
-        Sync-Repository $repo
+        Sync-Repository -Name $repo `
+            -RunTest:($NativeArgs -contains "--test") `
+            -RunProbe:($NativeArgs -contains "--probe")
         if ($NativeArgs -contains "--deliver") { Deliver-Repository $repo }
         Show-HealthAndLogs
         $screenshot = Get-OptionValue $NativeArgs "--screenshot"

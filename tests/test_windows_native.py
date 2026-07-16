@@ -31,8 +31,37 @@ class WindowsNativePathTests(unittest.TestCase):
         self.assertIn('"msys-file-manager"', source)
         self.assertIn('"msys-touch-calibration"', source)
         self.assertIn('"msys-input-touch"', source)
+        self.assertIn('"msys-calculator"', source)
+        self.assertIn('"msys-device-info"', source)
+        self.assertIn('"msys-notes"', source)
         self.assertIn('"msys-openstick-ch347"', source)
         self.assertIn('@("start", "stop")', source)
+
+    def test_optional_checks_stay_in_the_single_sync_build(self) -> None:
+        source = (ROOT / "msys-native.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn('-RunTest:($NativeArgs -contains "--test")', source)
+        self.assertIn('-RunProbe:($NativeArgs -contains "--probe")', source)
+        self.assertIn('Neither option runs doctor.', source)
+        self.assertIn('$targets += "lvgl-probe"', source)
+        self.assertIn('$targets += "probe"', source)
+        self.assertIn("-m unittest discover -s tests -v", source)
+        self.assertNotIn("make -j2 UI_DIR=$uiQ clean all", source)
+
+    def test_lvgl_repository_build_targets_match_their_makefiles(self) -> None:
+        source = (ROOT / "msys-native.ps1").read_text(encoding="utf-8-sig")
+
+        def case(name: str, following: str) -> str:
+            start = source.index(f'        "{name}" {{')
+            end = source.index(f'        "{following}" {{', start)
+            return source[start:end]
+
+        self.assertIn('@("stage")', case("msys-ui-lvgl", "msys-settings"))
+        self.assertIn('@("stage")', case("msys-file-manager", "msys-touch-calibration"))
+        self.assertIn('@("stage")', case("msys-input-touch", "msys-calculator"))
+        self.assertIn("UI_DIR=$uiQ all", case("msys-calculator", "msys-device-info"))
+        device_info = case("msys-device-info", "msys-notes")
+        self.assertIn('@("all")', device_info)
+        self.assertIn('$targets += "probe"', device_info)
 
     def test_remote_python_disables_bytecode(self) -> None:
         source = (ROOT / "msys-native.ps1").read_text(encoding="utf-8-sig")

@@ -47,9 +47,19 @@ For a running immutable SysV release, use `fast`/`q` as the default edit loop:
 .\msys.cmd q --repo msys-settings --screenshot artifacts\settings.png --force
 .\msys.cmd fast --repo msys-settings --deliver
 .\msys.cmd --native deliver --repo msys-settings
+.\msys.cmd --native sync --repo msys-device-info --test --probe
 .\msys.cmd fast --repo my-app --deliver `
   --overlay msys-sdk/msys_sdk=files/app/msys_sdk
 ```
+
+The native Windows `sync` and `fast` paths build LVGL repositories inside the
+same atomic remote staging transaction. Add `--test`, `--probe`, or both to run
+the repository's bounded unit/runtime checks immediately after that one build;
+the fast path still does not run `doctor`. Calculator and Device Info use their
+root `Makefile` `all` target, File Manager and Input use `stage`, and the shared
+LVGL runtime uses `stage` so package files cannot lag behind the compiled tree.
+Notes remains upload-only until it has a native Makefile, while `--test` runs
+its existing isolated-Python suite.
 
 Screenshot output paths belong to the workstation: the Windows wrapper maps
 bare relative, `.\`/`..\`, and drive-absolute forms into WSL paths. An already
