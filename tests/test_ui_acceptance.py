@@ -276,9 +276,6 @@ class FakeP0Runtime:
         if target == "role:window-manager" and method == "recents":
             return returned({"schema": "msys.window-list.v1", "windows": self.windows()})
         if target == "role:window-manager" and method == "navigation_action":
-            if self.task_visible:
-                self.task_visible = False
-                return returned({"ok": True, "dismissed": "task-switcher"})
             if self.input_method_visible:
                 self.input_method_visible = False
                 return returned(
@@ -294,6 +291,9 @@ class FakeP0Runtime:
                         },
                     }
                 )
+            if self.task_visible:
+                self.task_visible = False
+                return returned({"ok": True, "dismissed": "task-switcher"})
             if self.foreground:
                 backgrounded = self.foreground[0]
                 self.backgrounded.add(backgrounded)
@@ -562,6 +562,69 @@ class P0UIAcceptanceTests(unittest.TestCase):
             if target == "role:window-manager" and method == "navigation_action"
         ]
         self.assertEqual(len(back_calls), 3)
+
+    def test_recents_back_handles_input_method_and_waits_for_settled_close(self) -> None:
+        runtime = FakeP0Runtime(input_method_component=DEFAULT_COMPONENTS[0])
+
+        status, document = run_p0_ui_acceptance(
+            "/tmp/msys-main",
+            rpc_call=runtime,
+            sleep=runtime.sleep,
+            thumbnail_probe=fake_thumbnail,
+            memory_probe=fake_memory,
+            display_log="/missing/old-sink.log",
+        )
+
+        self.assertEqual(status, 0)
+        evidence = document["checks"]["back_recents"]
+        self.assertTrue(evidence["input_method_before"])
+        self.assertEqual(
+            [item.get("dismissed") for item in evidence["actions"]],
+            ["input-method", "task-switcher"],
+        )
+        calls = runtime.calls
+        show_positions = [
+            index
+            for index, (target, method, _payload) in enumerate(calls)
+            if target == "role:task-switcher" and method == "show"
+        ]
+        close_position = next(
+            index
+            for index, (target, method, _payload) in enumerate(calls)
+            if target == "role:task-switcher" and method == "close_task"
+        )
+        back_position = next(
+            index
+            for index, (target, method, _payload) in enumerate(calls)
+            if index > close_position
+            and target == "role:window-manager"
+            and method == "navigation_action"
+        )
+        self.assertTrue(
+            any(
+                show_positions[1] < index < close_position
+                and target == "role:window-manager"
+                and method == "recents"
+                for index, (target, method, _payload) in enumerate(calls)
+            )
+        )
+        self.assertTrue(
+            any(
+                close_position < index < back_position
+                and target == "role:task-switcher"
+                and method == "list_recents"
+                for index, (target, method, _payload) in enumerate(calls)
+            )
+        )
+        navigation_operations = [
+            operation
+            for operation in document["operations"]
+            if operation.get("method") == "navigation_action"
+        ]
+        self.assertEqual(
+            navigation_operations[0]["result"]["dismissed"],
+            "input-method",
+        )
 
     def test_failure_still_restores_apps_that_were_running_before_test(self) -> None:
         original = {"org.msys.settings:main", "org.msys.device-info:device-info"}

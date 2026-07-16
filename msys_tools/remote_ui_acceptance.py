@@ -402,6 +402,26 @@ def run_p0_ui_acceptance(
     restored = True
     error: str | None = None
 
+    def navigation_result(payload: dict[str, Any]) -> dict[str, Any]:
+        nested = payload.get("result")
+        return nested if isinstance(nested, dict) else payload
+
+    def back_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+        result = navigation_result(payload)
+        return {
+            key: result.get(key)
+            for key in (
+                "ok",
+                "dismissed",
+                "backgrounded_component",
+                "closed_component",
+                "destination",
+                "reason",
+                "window_id",
+            )
+            if result.get(key) is not None
+        }
+
     def rpc(target: str, method: str, payload: dict[str, Any], step: str) -> dict[str, Any]:
         result = caller(
             runtime_dir,
@@ -413,14 +433,17 @@ def run_p0_ui_acceptance(
             in {"foreground_stack", "get_layout", "list_components", "list_recents", "recents"},
         )
         response = result.get("response") if isinstance(result, dict) else None
-        operations.append(
-            {
-                "step": step,
-                "target": target,
-                "method": method,
-                "ok": isinstance(response, dict) and response.get("type") == "return",
-            }
-        )
+        operation = {
+            "step": step,
+            "target": target,
+            "method": method,
+            "ok": isinstance(response, dict) and response.get("type") == "return",
+        }
+        if operation["ok"] and method == "navigation_action":
+            response_payload = response.get("payload")
+            if isinstance(response_payload, dict):
+                operation["result"] = back_evidence(response_payload)
+        operations.append(operation)
         return _payload(result, step)
 
     def inventory(step: str) -> list[dict[str, Any]]:
@@ -638,6 +661,11 @@ def run_p0_ui_acceptance(
             lambda: task_list("recents.ready-for-close"),
             lambda items: all(_window(items, component) for component in components),
         )
+        wait(
+            "recents.visible-for-close",
+            lambda: windows("recents.visible-for-close"),
+            lambda items: _visible_role(items, "task-switcher"),
+        )
         rpc(
             "role:task-switcher",
             "close_task",
@@ -649,22 +677,58 @@ def run_p0_ui_acceptance(
             lambda: inventory("recents.close"),
             lambda items: stopped(items, close_component),
         )
-        if _window(windows("recents.after-close"), close_component):
-            raise P0UIAcceptanceError("closed Recents task remains present")
+        wait(
+            "recents.after-close-cards",
+            lambda: task_list("recents.after-close-cards"),
+            lambda items: _window(items, close_component) is None,
+        )
+        after_close_windows = wait(
+            "recents.after-close",
+            lambda: windows("recents.after-close"),
+            lambda items: bool(
+                _window(items, close_component) is None
+                and _visible_role(items, "task-switcher")
+            ),
+        )
         checks["close"] = {"component": close_component}
 
-        rpc(
+        first_recents_back = rpc(
             "role:window-manager",
             "navigation_action",
             {"action": "back", "input": "debug"},
             "recents.back",
         )
+        recents_back_actions = [back_evidence(first_recents_back)]
+        first_recents_result = navigation_result(first_recents_back)
+        if first_recents_result.get("dismissed") == "input-method":
+            wait(
+                "recents.input-method-hidden",
+                lambda: windows("recents.input-method-hidden"),
+                lambda items: not _visible_role(items, "input-method"),
+            )
+            second_recents_back = rpc(
+                "role:window-manager",
+                "navigation_action",
+                {"action": "back", "input": "debug"},
+                "recents.back-task-switcher",
+            )
+            recents_back_actions.append(back_evidence(second_recents_back))
+            first_recents_result = navigation_result(second_recents_back)
+        dismissed = first_recents_result.get("dismissed")
+        if dismissed not in {None, "task-switcher"}:
+            raise P0UIAcceptanceError(
+                f"recents.back dismissed an unexpected overlay: {dismissed}"
+            )
         wait(
             "recents.back",
             lambda: windows("recents.back"),
             lambda items: not _visible_role(items, "task-switcher"),
         )
-        checks["back_recents"] = {"visible": False}
+        checks["back_recents"] = {
+            "visible": False,
+            "input_method_before": _visible_role(after_close_windows, "input-method"),
+            "actions": recents_back_actions,
+        }
 
         back_component = components[2]
         rpc("msys.core", "start", {"component": back_component}, "back.focus")
@@ -688,26 +752,6 @@ def run_p0_ui_acceptance(
             ),
             None,
         )
-
-        def navigation_result(payload: dict[str, Any]) -> dict[str, Any]:
-            nested = payload.get("result")
-            return nested if isinstance(nested, dict) else payload
-
-        def back_evidence(payload: dict[str, Any]) -> dict[str, Any]:
-            result = navigation_result(payload)
-            return {
-                key: result.get(key)
-                for key in (
-                    "ok",
-                    "dismissed",
-                    "backgrounded_component",
-                    "closed_component",
-                    "destination",
-                    "reason",
-                    "window_id",
-                )
-                if result.get(key) is not None
-            }
 
         first_back = rpc(
             "role:window-manager",
