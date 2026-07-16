@@ -805,6 +805,57 @@ def run_p0_ui_acceptance(
             raise P0UIAcceptanceError("notification toast exceeded its bounded lifetime")
         toast_pending = False
         checks["toast"] = {"requested_timeout_ms": 700, "waited_ms": 3400}
+
+        history = rpc(
+            "role:notification-center",
+            "list",
+            {"limit": 24},
+            "notification-center.list",
+        )
+        notifications = _records(
+            history,
+            "notifications",
+            "notification-center.list",
+        )
+        expected_message = "MSYS P0 bounded toast"
+        if not any(item.get("message") == expected_message for item in notifications):
+            raise P0UIAcceptanceError(
+                "notification center did not retain the bounded toast"
+            )
+        rpc(
+            "role:notification-center",
+            "show",
+            {},
+            "notification-center.show",
+        )
+        center_windows = wait(
+            "notification-center.visible",
+            lambda: windows("notification-center.visible"),
+            lambda items: _visible_role(items, "notification-center"),
+        )
+        rpc(
+            "role:notification-center",
+            "hide",
+            {},
+            "notification-center.hide",
+        )
+        wait(
+            "notification-center.hidden",
+            lambda: windows("notification-center.hidden"),
+            lambda items: not _visible_role(items, "notification-center"),
+        )
+        checks["notification_center"] = {
+            "count": history.get("count"),
+            "limit": history.get("limit"),
+            "retained_test_notification": True,
+            "visible_window_count": sum(
+                1
+                for item in center_windows
+                if item.get("role") == "notification-center"
+                and item.get("state") == "visible"
+            ),
+            "hidden": True,
+        }
     except (OSError, RuntimeError, ValueError) as exc:
         error = str(exc)
     finally:
@@ -820,6 +871,12 @@ def run_p0_ui_acceptance(
 
         if mutated:
             clean("role:task-switcher", "hide", {}, "cleanup.hide-recents")
+            clean(
+                "role:notification-center",
+                "hide",
+                {},
+                "cleanup.hide-notification-center",
+            )
             if toast_pending:
                 sleep(3.4)
             try:

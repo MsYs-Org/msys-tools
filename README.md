@@ -723,7 +723,9 @@ The `msys.p0-ui-acceptance.v1` JSON verifies the effective workarea, exact
 component/window identities, real bounded P6 window thumbnails, three-card
 Recents data and visible overlay, card activation and explicit close, Back
 dismissal, Back application backgrounding/Home, and a bounded notification
-toast. After all three test
+toast. It also requires that the notification center retain that event, map a
+real full overlay on `show`, return bounded history through `list`, and unmap
+on `hide`. After all three test
 apps are ready, the same helper also reports `/proc/*/smaps_rollup` RSS/PSS for
 Core, Native Shell, Native HAL, Notes, Calculator, and Device Info. Missing
 processes, permissions, or kernel files are explicit `unavailable` evidence;

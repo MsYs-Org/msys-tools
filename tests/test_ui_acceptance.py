@@ -59,6 +59,8 @@ class FakeP0Runtime:
         self.task_visible = False
         self.task_above_apps = True
         self.toast_visible = False
+        self.notification_center_visible = False
+        self.notifications: list[dict[str, object]] = []
         self.input_method_component = input_method_component
         self.input_method_visible = False
         self.calls: list[tuple[str, str, dict]] = []
@@ -161,6 +163,19 @@ class FakeP0Runtime:
                     "source": "x11",
                 },
             )
+        if self.notification_center_visible:
+            result.insert(
+                0,
+                {
+                    "id": "msys.x11-window.v1:notification-center",
+                    "native_id": "0x203",
+                    "identity": "org.msys.shell.native.notification-center",
+                    "role": "notification-center",
+                    "kind": "overlay",
+                    "state": "visible",
+                    "source": "x11",
+                },
+            )
         if self.input_method_visible:
             result.insert(
                 0,
@@ -238,6 +253,12 @@ class FakeP0Runtime:
             return returned({"component": component, "state": "stopped"})
         if target == "msys.core" and method == "broadcast":
             self.toast_visible = True
+            event_payload = payload.get("payload", {})
+            if isinstance(event_payload, dict):
+                self.notifications.append({
+                    "id": "test-notification",
+                    "message": str(event_payload.get("message") or ""),
+                })
             return returned({"ok": True})
         if target == "role:window-manager" and method == "get_layout":
             return returned(
@@ -305,6 +326,19 @@ class FakeP0Runtime:
         if target == "role:task-switcher" and method == "close_task":
             self.stop(str(payload["component"]))
             return returned({"ok": True, "queued": True})
+        if target == "role:notification-center" and method == "list":
+            return returned({
+                "notifications": list(reversed(self.notifications)),
+                "count": len(self.notifications),
+                "limit": 24,
+                "visible": self.notification_center_visible,
+            })
+        if target == "role:notification-center" and method == "show":
+            self.notification_center_visible = True
+            return returned({"visible": True, "count": len(self.notifications)})
+        if target == "role:notification-center" and method == "hide":
+            self.notification_center_visible = False
+            return returned({"visible": False, "count": len(self.notifications)})
         raise AssertionError(f"unexpected call: {target} {method} {payload}")
 
 
@@ -370,6 +404,7 @@ class P0UIAcceptanceTests(unittest.TestCase):
                 "back_recents",
                 "back_application",
                 "toast",
+                "notification_center",
             },
         )
         self.assertFalse(document["dirty_stats"]["available"])
