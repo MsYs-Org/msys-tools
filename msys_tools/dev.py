@@ -79,6 +79,8 @@ DEFAULT_REPOS = [
     "msys-notes",
     "msys-calculator",
     "msys-device-info",
+    "msys-file-manager",
+    "msys-touch-calibration",
     "msys-input-touch",
     "msys-openstick-ch347",
     "msys-install",
@@ -138,6 +140,8 @@ FAST_DELIVERY_SDK_REPOSITORIES = frozenset(
         "msys-notes",
         "msys-calculator",
         "msys-device-info",
+        "msys-file-manager",
+        "msys-touch-calibration",
         "msys-input-touch",
     }
 )

@@ -279,6 +279,8 @@ class DeliveryCommandTests(unittest.TestCase):
         self.assertIn("msys-notes", dev.DEFAULT_REPOS)
         self.assertIn("msys-calculator", dev.DEFAULT_REPOS)
         self.assertIn("msys-device-info", dev.DEFAULT_REPOS)
+        self.assertIn("msys-file-manager", dev.DEFAULT_REPOS)
+        self.assertIn("msys-touch-calibration", dev.DEFAULT_REPOS)
         self.assertIn("msys-input-touch", dev.DEFAULT_REPOS)
         self.assertIn("msys-openstick-ch347", dev.DEFAULT_REPOS)
         self.assertEqual(dev.DEFAULT_REPOS.count("msys-x11-session"), 1)

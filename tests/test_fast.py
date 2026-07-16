@@ -435,6 +435,8 @@ class FastWorkflowTests(unittest.TestCase):
             ("msys-notes", "org.msys.notes"),
             ("msys-calculator", "org.msys.calculator"),
             ("msys-device-info", "org.msys.device-info"),
+            ("msys-file-manager", "org.msys.file-manager"),
+            ("msys-touch-calibration", "org.msys.touch-calibration"),
             ("msys-input-touch", "org.msys.input.touch"),
         ):
             with self.subTest(repository=repository), tempfile.TemporaryDirectory() as temporary:

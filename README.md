@@ -153,7 +153,8 @@ native Core rebuild; enter a repository or pass `--repo` to synchronize code.
 
 `fast --deliver` also accepts repeatable
 `--overlay SOURCE=RELATIVE_DEST`. Canonical `msys-settings`, `msys-notes`,
-`msys-calculator`, `msys-device-info`, and `msys-input-touch` deliveries each
+`msys-calculator`, `msys-device-info`, `msys-file-manager`,
+`msys-touch-calibration`, and `msys-input-touch` deliveries each
 require the sibling SDK at runtime, so when no explicit overlay is given,
 `fast` applies it to each package independently:
 
