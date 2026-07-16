@@ -317,6 +317,7 @@ function Deliver-Repository {
     $metadata = $output + "/build.json"
     $payloadFile = $output + "/payload.json"
     $stageCode = 'import json,os,pathlib,re,sys;m=json.loads(pathlib.Path(sys.argv[1]).read_text());out=pathlib.Path(sys.argv[2]).resolve();a=pathlib.Path(m["artifact"]).resolve();h=m["sha256"];p=m["package"];v=m["version"];assert out in a.parents and re.fullmatch(r"[a-f0-9]{64}",h) and re.fullmatch(r"[A-Za-z0-9._-]+",p) and re.fullmatch(r"[A-Za-z0-9._+~-]+",v);d=pathlib.Path(sys.argv[3])/"updates/staged-rpc";d.mkdir(parents=True,exist_ok=True,mode=0o700);s=d/(h+".maf");os.replace(a,s);s.chmod(0o600);print(json.dumps({"path":str(s),"sha256":h,"package":p,"version":v,"remote":True,"require_sha256":True,"require_content_hashes":True},separators=(",",":")))'
+    $cleanupStageCode = 'import json,pathlib,re,sys;p=pathlib.Path(json.loads(pathlib.Path(sys.argv[1]).read_text())["path"]).resolve();d=(pathlib.Path(sys.argv[2])/"updates/staged-rpc").resolve();assert p.parent==d and re.fullmatch(r"[a-f0-9]{64}\.maf",p.name);p.unlink(missing_ok=True)'
     $buildCommand = (
         "set -eu; " + (Get-RemotePythonPrelude) + "; mkdir -p " + (Quote-Sh $output) +
         "; trap 'rm -rf " + (Quote-Sh $output) + "' EXIT HUP INT TERM; cd " + (Quote-Sh $script:Config.remote) + "; " +
@@ -331,10 +332,12 @@ function Deliver-Repository {
         (Get-RemotePythonInvocation) + " -c " + (Quote-Sh $stageCode) + " " +
         (Quote-Sh $metadata) + " " + (Quote-Sh $output) + " " + (Quote-Sh $script:Config.state_dir) +
         " > " + (Quote-Sh $payloadFile) + "; " +
-        (Get-RemotePythonInvocation) + " -m msys_tools.remote_ctl --runtime-dir " +
+        "if " + (Get-RemotePythonInvocation) + " -m msys_tools.remote_ctl --runtime-dir " +
         (Quote-Sh $script:Config.runtime_dir) + " --target role:install-agent --method install_archive" +
-        " --payload `"`$(cat " + (Quote-Sh $payloadFile) + ")`" --timeout 120; " +
-        "trap - EXIT HUP INT TERM; rm -rf " + (Quote-Sh $output)
+        " --payload `"`$(cat " + (Quote-Sh $payloadFile) + ")`" --timeout 120; then status=0; else status=`$?; fi; " +
+        (Get-RemotePythonInvocation) + " -c " + (Quote-Sh $cleanupStageCode) + " " +
+        (Quote-Sh $payloadFile) + " " + (Quote-Sh $script:Config.state_dir) + "; " +
+        "trap - EXIT HUP INT TERM; rm -rf " + (Quote-Sh $output) + "; exit `"`$status`""
     )
     $response = Invoke-SshCapture $buildCommand
     $result = $response | ConvertFrom-Json
