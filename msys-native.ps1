@@ -235,6 +235,13 @@ function Get-TargetBuildCommand {
         "msys-sdk" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 clean; MAKEFLAGS= MFLAGS= make -j1 CFLAGS='-Os -g0 -DNDEBUG -std=c11 -Wall -Wextra -Wpedantic' all" }
         "msys-core" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 -C native clean; MAKEFLAGS= MFLAGS= make -j1 -C native OPTIMIZE=-Os DEBUG_INFO=-g0 all" }
         "msys-shell-native" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 SDK_DIR=$sdkQ clean; MAKEFLAGS= MFLAGS= make -j1 SDK_DIR=$sdkQ CFLAGS='-Os -g0 -DNDEBUG -std=c11 -Wall -Wextra -Wpedantic -Werror' all" }
+        "msys-ui-lvgl" {
+            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j2 clean all test"
+        }
+        "msys-settings" {
+            $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
+            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j2 UI_DIR=$uiQ clean all"
+        }
         "msys-hal" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 -C native MSYS_SDK_DIR=$sdkQ clean; MAKEFLAGS= MFLAGS= make -j1 -C native MSYS_SDK_DIR=$sdkQ CFLAGS='-Os -g0 -DNDEBUG' all" }
         "msys-x11-session" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make clean; MAKEFLAGS= MFLAGS= make SDK_ROOT=$sdkQ CFLAGS='-Os -g0 -DNDEBUG -Wall -Wextra -Werror -std=c11' all" }
         "msys-audio" {
