@@ -651,6 +651,40 @@ class P0UIAcceptanceTests(unittest.TestCase):
         self.assertEqual(set(runtime.foreground), original)
         self.assertIn("thumbnail probe failed", document["error"])
 
+    def test_application_waits_for_a_complete_thumbnail_snapshot(self) -> None:
+        runtime = FakeP0Runtime()
+        attempts: dict[str, int] = {}
+
+        def transient_thumbnail(path: str, runtime_dir: str) -> dict:
+            attempts[path] = attempts.get(path, 0) + 1
+            if attempts[path] == 1:
+                raise P0UIAcceptanceError(
+                    "thumbnail pixel payload length is invalid: "
+                    "dimensions=288x356 expected_pixels=307584 "
+                    "actual_pixels=12288 header_bytes=15 read_bytes=12303 "
+                    "stat_bytes=12303"
+                )
+            return fake_thumbnail(path, runtime_dir)
+
+        status, document = run_p0_ui_acceptance(
+            "/tmp/msys-main",
+            rpc_call=runtime,
+            sleep=runtime.sleep,
+            thumbnail_probe=transient_thumbnail,
+            memory_probe=fake_memory,
+            display_log="/missing/old-sink.log",
+        )
+
+        self.assertEqual(status, 0)
+        self.assertTrue(document["ok"])
+        self.assertTrue(all(count >= 2 for count in attempts.values()))
+        application_waits = [
+            operation
+            for operation in document["operations"]
+            if str(operation.get("step", "")).startswith("window.org.msys.")
+        ]
+        self.assertTrue(all(item["attempts"] == 2 for item in application_waits))
+
     def test_visible_overlay_aborts_before_starting_or_stopping_apps(self) -> None:
         runtime = FakeP0Runtime()
         runtime.task_visible = True
@@ -756,6 +790,21 @@ class P0UIAcceptanceTests(unittest.TestCase):
         self.assertEqual(evidence["format"], "P6")
         self.assertEqual((evidence["width"], evidence["height"]), (2, 1))
         self.assertEqual(len(evidence["sha256"]), 64)
+        self.assertIsInstance(evidence["inode"], int)
+        self.assertIsInstance(evidence["mtime_ns"], int)
+
+    def test_thumbnail_probe_reports_exact_incomplete_payload_sizes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            thumbnail = runtime / "incomplete.ppm"
+            thumbnail.write_bytes(b"P6\n288 356\n255\n" + bytes(12_288))
+
+            with self.assertRaisesRegex(
+                P0UIAcceptanceError,
+                r"dimensions=288x356 expected_pixels=307584 actual_pixels=12288 "
+                r"header_bytes=15 read_bytes=12303 stat_bytes=12303",
+            ):
+                probe_thumbnail(str(thumbnail), str(runtime))
 
     def test_latest_dirty_stats_record_is_evidence_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

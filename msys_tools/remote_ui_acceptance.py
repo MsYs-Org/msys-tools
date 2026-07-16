@@ -145,21 +145,52 @@ def probe_thumbnail(path: str, runtime_dir: str) -> dict[str, Any]:
         Path(os.path.realpath(candidate)).relative_to(Path(os.path.realpath(runtime)))
     except ValueError as exc:
         raise P0UIAcceptanceError("thumbnail path escapes the runtime directory") from exc
+    descriptor = -1
     try:
-        metadata = candidate.lstat()
-        data = candidate.read_bytes()
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(candidate, flags)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise P0UIAcceptanceError("thumbnail must be a regular non-symlink file")
+        chunks = []
+        remaining = 4 * 1024 * 1024 + 1
+        while remaining:
+            chunk = os.read(descriptor, min(128 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
     except OSError as exc:
         raise P0UIAcceptanceError(f"thumbnail is unavailable: {exc}") from exc
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-        raise P0UIAcceptanceError("thumbnail must be a regular non-symlink file")
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if not 16 <= len(data) <= 4 * 1024 * 1024:
-        raise P0UIAcceptanceError("thumbnail size is outside the accepted bound")
+        raise P0UIAcceptanceError(
+            "thumbnail size is outside the accepted bound: "
+            f"read_bytes={len(data)} stat_bytes={metadata.st_size} "
+            f"inode={metadata.st_ino} mtime_ns={metadata.st_mtime_ns} "
+            "accepted=16..4194304"
+        )
     header = re.match(rb"P6\n([1-9][0-9]{0,3}) ([1-9][0-9]{0,3})\n255\n", data)
     if header is None:
         raise P0UIAcceptanceError("thumbnail is not a canonical P6 PPM")
     width, height = int(header.group(1)), int(header.group(2))
-    if len(data) - header.end() != width * height * 3:
-        raise P0UIAcceptanceError("thumbnail pixel payload length is invalid")
+    expected_pixels = width * height * 3
+    actual_pixels = len(data) - header.end()
+    if actual_pixels != expected_pixels:
+        raise P0UIAcceptanceError(
+            "thumbnail pixel payload length is invalid: "
+            f"dimensions={width}x{height} expected_pixels={expected_pixels} "
+            f"actual_pixels={actual_pixels} header_bytes={header.end()} "
+            f"read_bytes={len(data)} stat_bytes={metadata.st_size} "
+            f"inode={metadata.st_ino} mtime_ns={metadata.st_mtime_ns}"
+        )
     return {
         "path": path,
         "format": "P6",
@@ -167,6 +198,8 @@ def probe_thumbnail(path: str, runtime_dir: str) -> dict[str, Any]:
         "height": height,
         "bytes": len(data),
         "sha256": hashlib.sha256(data).hexdigest(),
+        "inode": metadata.st_ino,
+        "mtime_ns": metadata.st_mtime_ns,
     }
 
 
@@ -551,15 +584,37 @@ def run_p0_ui_acceptance(
             reply = rpc("msys.core", "start", {"component": component}, f"start.{component}")
             if reply.get("state") != "ready" or isinstance(reply.get("activation_error"), dict):
                 raise P0UIAcceptanceError(f"application failed to start: {component}")
-            snapshot = wait(
-                f"window.{component}",
-                lambda component=component: windows(f"window.{component}"),
-                lambda items, component=component: bool(
-                    (item := _window(items, component))
-                    and item.get("state") == "visible"
-                    and item.get("thumbnail")
-                ),
-            )
+            thumbnail_evidence: dict[str, Any] | None = None
+            thumbnail_error: P0UIAcceptanceError | None = None
+
+            def valid_thumbnail(items: list[dict[str, Any]]) -> bool:
+                nonlocal thumbnail_evidence, thumbnail_error
+                item = _window(items, component)
+                if not item or item.get("state") != "visible" or not item.get("thumbnail"):
+                    return False
+                try:
+                    thumbnail_evidence = thumbnail_probe(
+                        str(item["thumbnail"]), runtime_dir
+                    )
+                    thumbnail_error = None
+                    return True
+                except P0UIAcceptanceError as exc:
+                    thumbnail_error = exc
+                    return False
+
+            try:
+                snapshot = wait(
+                    f"window.{component}",
+                    lambda component=component: windows(f"window.{component}"),
+                    valid_thumbnail,
+                )
+            except P0UIAcceptanceError as exc:
+                if thumbnail_error is not None:
+                    raise P0UIAcceptanceError(
+                        f"window.{component} did not publish a complete thumbnail: "
+                        f"{thumbnail_error}"
+                    ) from exc
+                raise
             item = _window(snapshot, component)
             if item is None:
                 raise P0UIAcceptanceError(f"application window disappeared: {component}")
@@ -584,7 +639,7 @@ def run_p0_ui_acceptance(
                     "identity": item.get("identity"),
                     "window_id": item.get("id"),
                     "geometry": item.get("geometry"),
-                    "thumbnail": thumbnail_probe(str(item["thumbnail"]), runtime_dir),
+                    "thumbnail": thumbnail_evidence,
                 }
             )
         checks["applications"] = application_checks

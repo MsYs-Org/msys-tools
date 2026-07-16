@@ -736,6 +736,13 @@ applications that were not originally running, restarts any original manual
 application that the route explicitly closed, and restores the original foreground order
 or Home. A restoration mismatch makes the command fail.
 
+Window discovery and thumbnail publication are asynchronous. The application
+step therefore keeps polling within the existing UI timeout until one opened
+file snapshot passes the complete canonical P6 header and exact pixel-length
+checks. A timeout remains a hard failure and reports the last observed header,
+expected pixel bytes, bytes read, and `fstat` size; truncated images are never
+accepted.
+
 When the display sink emits a line such as `dirty_stats frame=...`, the newest
 record is included under `dirty_stats`. This is evidence-only: an older sink
 without that record does not fail UI acceptance. The command does not switch
