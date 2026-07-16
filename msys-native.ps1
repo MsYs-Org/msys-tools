@@ -33,6 +33,7 @@ function Write-NativeUsage {
 MSYS native Windows path (no WSL)
 
   .\msys.cmd --native sync --repo msys-settings
+  .\msys.cmd --native deliver --repo msys-settings
   .\msys.cmd --native fast --repo msys-settings --deliver
   .\msys.cmd --native ssh
   .\msys.cmd --native tail
@@ -238,7 +239,7 @@ function Get-TargetBuildCommand {
         "msys-core" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 -C native clean; MAKEFLAGS= MFLAGS= make -j1 -C native OPTIMIZE=-Os DEBUG_INFO=-g0 all" }
         "msys-shell-native" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 SDK_DIR=$sdkQ clean; MAKEFLAGS= MFLAGS= make -j1 SDK_DIR=$sdkQ CFLAGS='-Os -g0 -DNDEBUG -std=c11 -Wall -Wextra -Wpedantic -Werror' all" }
         "msys-ui-lvgl" {
-            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j2 clean all test"
+            return "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 clean; MAKEFLAGS= MFLAGS= make -j2 all test stage"
         }
         "msys-settings" {
             $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
@@ -398,6 +399,12 @@ switch ($commandName) {
     { $_ -in @("help", "-h", "--help") } { Write-NativeUsage; exit 0 }
     "config" { Write-Host "config: $script:ConfigPath"; $script:Config | ConvertTo-Json -Depth 3; exit 0 }
     "sync" { Sync-Repository (Get-RepoName $NativeArgs); exit 0 }
+    "deliver" {
+        $repo = Get-RepoName $NativeArgs
+        Deliver-Repository $repo
+        Show-HealthAndLogs
+        exit 0
+    }
     { $_ -in @("fast", "q") } {
         $repo = Get-RepoName $NativeArgs
         Sync-Repository $repo

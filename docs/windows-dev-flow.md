@@ -46,6 +46,7 @@ For a running immutable SysV release, use `fast`/`q` as the default edit loop:
 .\msys.cmd fast --repo msys-settings
 .\msys.cmd q --repo msys-settings --screenshot artifacts\settings.png --force
 .\msys.cmd fast --repo msys-settings --deliver
+.\msys.cmd --native deliver --repo msys-settings
 .\msys.cmd fast --repo my-app --deliver `
   --overlay msys-sdk/msys_sdk=files/app/msys_sdk
 ```

@@ -2,6 +2,7 @@
 
 Windows 无 WSL 备用通道：`.\msys.cmd --native sync --repo msys-settings`。
 构建递送并只看一次健康摘要：`.\msys.cmd --native fast --repo msys-settings --deliver`。
+若同步/编译已经成功、仅安装连接失败，使用 `.\msys.cmd --native deliver --repo msys-settings`，不会再次编译。
 进入板端或跟日志：`.\msys.cmd --native ssh`、`.\msys.cmd --native tail`。
 截图与运行时控制：`.\msys.cmd --native screenshot .\artifacts\home.png`、`.\msys.cmd --native components`。
 默认使用 `%USERPROFILE%\.ssh\msys-dev-windows-ed25519`；`%USERPROFILE%\.config\msys-dev\native-windows.json` 可覆盖配置，不保存密码。
