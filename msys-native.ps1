@@ -261,7 +261,7 @@ function Sync-Repository {
     $destination = $script:Config.remote + "/" + $Name
     $previous = $script:Config.remote + "/." + $Name + ".previous"
     try {
-        & tar.exe -cf $archive --exclude=.git --exclude=build --exclude=dist --exclude=__pycache__ --exclude=.pytest_cache --exclude=.mypy_cache --exclude=.ruff_cache --exclude=.cache --exclude=cache --exclude="*.pyc" -C $repo .
+        & tar.exe -cf $archive --exclude=.git --exclude=build --exclude=dist --exclude=__pycache__ --exclude=.pytest_cache --exclude=.mypy_cache --exclude=.ruff_cache --exclude=.cache --exclude="*.pyc" -C $repo .
         if ($LASTEXITCODE -ne 0) { throw "tar failed with exit status $LASTEXITCODE" }
         & scp.exe @(Get-SshOptions) $archive ("{0}:{1}" -f $script:Config.target, $remoteArchive)
         if ($LASTEXITCODE -ne 0) { throw "scp failed with exit status $LASTEXITCODE" }
