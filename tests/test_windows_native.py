@@ -28,6 +28,7 @@ class WindowsNativePathTests(unittest.TestCase):
         self.assertNotIn("--exclude=cache", source)
         self.assertIn('"msys-ui-lvgl"', source)
         self.assertIn('"msys-settings"', source)
+        self.assertIn('"msys-openstick-ch347"', source)
 
     def test_remote_python_disables_bytecode(self) -> None:
         source = (ROOT / "msys-native.ps1").read_text(encoding="utf-8-sig")
