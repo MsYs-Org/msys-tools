@@ -180,8 +180,11 @@ class ScreenshotCommandTests(unittest.TestCase):
 
             self.assertEqual(status, 0)
             self.assertEqual(output.read_bytes(), png)
-            self.assertIn("msys_tools.remote_screenshot", capture.call_args.args[1])
-            self.assertNotIn("'--display'", capture.call_args.args[1])
+            remote_command = capture.call_args.args[1]
+            self.assertIn("msys_tools.remote_screenshot", remote_command)
+            self.assertIn("PYTHONDONTWRITEBYTECODE=1", remote_command)
+            self.assertIn("python3' '-B' '-m'", remote_command)
+            self.assertNotIn("'--display'", remote_command)
             self.assertEqual(scp.call_args.args[0][-2], f"root@device:{remote_path}")
             cleanup_command = cleanup.call_args.args[1]
             self.assertIn(f"rm -f -- '{remote_path}'", cleanup_command)

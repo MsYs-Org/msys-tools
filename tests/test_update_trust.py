@@ -148,6 +148,8 @@ class UpdatePublisherToolTests(unittest.TestCase):
             self.assertNotIn(str(private_key), upload_argv)
             remote_commands = "\n".join(call.args[1] for call in ssh.call_args_list)
             self.assertIn("msys_install.cli install-public-key", remote_commands)
+            self.assertIn("PYTHONDONTWRITEBYTECODE=1", remote_commands)
+            self.assertIn("python3' -B -m", remote_commands)
             self.assertIn("/msys-install:/opt/msys-dev/msys-sdk", remote_commands)
             self.assertIn("trap cleanup EXIT", remote_commands)
             self.assertIn("/srv/msys-state", remote_commands)

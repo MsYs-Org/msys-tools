@@ -250,6 +250,8 @@ class ShieldWorkstationCommandTests(unittest.TestCase):
         self.assertTrue(json.loads(output.getvalue())["status"]["visible"])
         command = capture.call_args.args[1]
         self.assertIn("-m msys_tools.remote_shield", command)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", command)
+        self.assertIn("python3' -B -m", command)
         self.assertIn("'show' --runtime-dir '/tmp/msys-main' --timeout 7", command)
 
     def test_workstation_command_rejects_false_or_mismatched_terminal(self) -> None:

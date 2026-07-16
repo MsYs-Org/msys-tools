@@ -141,12 +141,24 @@ class HostAcceptanceTests(unittest.TestCase):
         transport = mock.Mock(return_value=completed)
         output = io.StringIO()
         with redirect_stdout(output):
-            status = acceptance.run(self.config(), transport)
+            status = acceptance.run(
+                self.config(
+                    remote_python=(
+                        "/opt/msys/current/.runtime/python/bin/python3"
+                    )
+                ),
+                transport,
+            )
 
         self.assertEqual(status, 0)
         transport.assert_called_once()
         command, label = transport.call_args.args
         self.assertIn("msys_tools.remote_acceptance", command)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", command)
+        self.assertIn(
+            "'/opt/msys/current/.runtime/python/bin/python3' '-B' '-m'",
+            command,
+        )
         self.assertNotIn(" install ", command)
         self.assertNotIn("--method 'start'", command)
         self.assertNotIn("remote_lifecycle", command)
@@ -192,7 +204,10 @@ class HostAcceptanceTests(unittest.TestCase):
 
             self.assertEqual(status, 0)
             self.assertEqual(output.read_bytes(), png)
-            self.assertIn("msys_tools.remote_screenshot", transport.call_args.args[0])
+            command = transport.call_args.args[0]
+            self.assertIn("msys_tools.remote_screenshot", command)
+            self.assertIn("PYTHONDONTWRITEBYTECODE=1", command)
+            self.assertNotIn("python3' '-m'", command)
 
     def test_invalid_window_expectation_fails_before_transport(self) -> None:
         transport = mock.Mock()

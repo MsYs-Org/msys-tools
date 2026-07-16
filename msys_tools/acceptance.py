@@ -145,6 +145,7 @@ def build_remote_command(config: AcceptanceConfig, token: str) -> tuple[str, lis
     )
     probe_argv = [
         config.remote_python,
+        "-B",
         "-m",
         "msys_tools.remote_acceptance",
         "--runtime-dir",
@@ -180,6 +181,7 @@ def build_remote_command(config: AcceptanceConfig, token: str) -> tuple[str, lis
     if config.screenshot is not None:
         screenshot_argv = [
             config.remote_python,
+            "-B",
             "-m",
             "msys_tools.remote_screenshot",
             "--runtime-dir",

@@ -68,6 +68,7 @@ from .host_service import (
     select_backend,
     validate_state_binding,
 )
+from .release_compose import COMPOSED_ENTRIES
 
 
 DEFAULT_REPOS = [
@@ -696,6 +697,7 @@ def command_doctor(ctx: Context, profile: str = "mobile-spi") -> int:
     )
     prefix = DOCTOR_PROBE_PREFIX
     script = f"""set +e
+export PYTHONDONTWRITEBYTECODE=1
 emit() {{ printf '{prefix}|%s|%s|%s\\n' "$1" "$2" "$3"; }}
 check_command() {{
     check_name=$1
@@ -749,10 +751,10 @@ elif test -n "$xvfb_value"; then
 else
     emit x-server missing "Xorg=missing Xvfb=missing"
 fi
-if test -x {isolated_python} && python_version=$({isolated_python} --version 2>&1); then
+if test -x {isolated_python} && python_version=$({isolated_python} -B --version 2>&1); then
     emit isolated-python ok "$python_version"
-    if {isolated_python} -c 'import tkinter' >/dev/null 2>&1; then
-        tk_version=$({isolated_python} -c 'import tkinter; print(tkinter.TkVersion)' 2>/dev/null)
+    if {isolated_python} -B -c 'import tkinter' >/dev/null 2>&1; then
+        tk_version=$({isolated_python} -B -c 'import tkinter; print(tkinter.TkVersion)' 2>/dev/null)
         emit isolated-python-tkinter ok "Tk $tk_version"
     else
         emit isolated-python-tkinter missing "import tkinter failed"
@@ -1001,7 +1003,7 @@ def command_ssh_warm(ctx: Context) -> int:
 def command_runtime_status(ctx: Context, remote_python: str) -> int:
     ssh(ctx, (
         f"test -x {quote_sh(remote_python)} "
-        f"&& {quote_sh(remote_python)} --version "
+        f"&& PYTHONDONTWRITEBYTECODE=1 {quote_sh(remote_python)} -B --version "
         f"|| (echo missing isolated runtime: {quote_sh(remote_python)}; exit 1)"
     ))
     return 0
@@ -1042,7 +1044,7 @@ def command_runtime_install(ctx: Context, archive: Path, remote_python: str) -> 
         f"rm -rf {quote_sh(runtime_root)}.old && "
         f"if test -d {quote_sh(runtime_root)}; then mv {quote_sh(runtime_root)} {quote_sh(runtime_root)}.old; fi && "
         f"mv {quote_sh(runtime_root)}.new {quote_sh(runtime_root)} && "
-        f"{quote_sh(remote_python)} --version && "
+        f"PYTHONDONTWRITEBYTECODE=1 {quote_sh(remote_python)} -B --version && "
         f"rm -f {quote_sh(tmp_remote)}"
     ))
     return 0
@@ -1784,7 +1786,7 @@ if sorted(matches, key=lambda item: item["path"]) != sorted(entries, key=lambda 
                 + manager_build
                 +
                 f"test -f {quote_sh(runtime_inventory)}; "
-                f"{quote_sh(ctx.remote_python)} -c {quote_sh(inventory_update)} "
+                f"PYTHONDONTWRITEBYTECODE=1 {quote_sh(ctx.remote_python)} -B -c {quote_sh(inventory_update)} "
                 f"{quote_sh(staging)} "
                 f"{quote_sh(str(bootstrap_spec.runtime_inventory_path))} "
                 f"{inventory_paths}",
@@ -1950,8 +1952,9 @@ def _remote_lifecycle_command(
     log_file: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = (
+        "PYTHONDONTWRITEBYTECODE=1 "
         f"PYTHONPATH={quote_sh(ctx.remote + '/msys-tools')} "
-        f"{quote_sh(ctx.remote_python)} -m msys_tools.remote_lifecycle "
+        f"{quote_sh(ctx.remote_python)} -B -m msys_tools.remote_lifecycle "
         f"{quote_sh(action)} --runtime-dir {quote_sh(runtime_dir)}"
     )
     if timeout is not None:
@@ -2030,7 +2033,7 @@ def command_run(
         _print_completed_output(prepared, error=True)
         return prepared.returncode or 1
     runner = (
-        "set -- -m msys_core.msysd --foreground "
+        "set -- -B -m msys_core.msysd --foreground "
         f"--config {quote_sh(source_config)} "
         f"--runtime-dir {quote_sh(runtime_dir)} "
         f"--profile {quote_sh(profile)}; "
@@ -2122,6 +2125,7 @@ def command_debug(
         quote_sh(value)
         for value in (
             ctx.remote_python,
+            "-B",
             "-m",
             "msys_tools.remote_lifecycle",
             "status",
@@ -2169,8 +2173,9 @@ def remote_control_command(
     payload_json = json.dumps(payload, separators=(",", ":"))
     py_path = f"{ctx.remote}/msys-tools"
     command = (
+        "PYTHONDONTWRITEBYTECODE=1 "
         f"PYTHONPATH={quote_sh(py_path)} "
-        f"{quote_sh(ctx.remote_python)} -m msys_tools.remote_ctl "
+        f"{quote_sh(ctx.remote_python)} -B -m msys_tools.remote_ctl "
         f"--runtime-dir {quote_sh(runtime_dir)} "
         f"--target {quote_sh(target)} "
         f"--method {quote_sh(method)} "
@@ -2544,8 +2549,9 @@ def command_shield(
     timeout: float = DEFAULT_RUN_TIMEOUT,
 ) -> int:
     command = (
+        "PYTHONDONTWRITEBYTECODE=1 "
         f"PYTHONPATH={quote_sh(ctx.remote + '/msys-tools')} "
-        f"{quote_sh(ctx.remote_python)} -m msys_tools.remote_shield "
+        f"{quote_sh(ctx.remote_python)} -B -m msys_tools.remote_shield "
         f"{quote_sh(action)} --runtime-dir {quote_sh(runtime_dir)} "
         f"--timeout {timeout:g}"
     )
@@ -3443,8 +3449,9 @@ def command_install_update_public_key(
     command = (
         "set -eu; "
         f"cleanup() {{ rm -f {quote_sh(incoming)}; }}; trap cleanup EXIT; "
+        "PYTHONDONTWRITEBYTECODE=1 "
         f"PYTHONPATH={quote_sh(ctx.remote + '/msys-install:' + ctx.remote + '/msys-sdk')} "
-        f"{quote_sh(ctx.remote_python)} -m msys_install.cli install-public-key "
+        f"{quote_sh(ctx.remote_python)} -B -m msys_install.cli install-public-key "
         f"{quote_sh(incoming)} "
         f"--state-dir {quote_sh(state_path.as_posix())}"
     )
@@ -3661,6 +3668,7 @@ def _x11_debug_command(
     binary = f"{ctx.remote}/msys-x11-session/bin/msys-x11-policy"
     argv = [
         ctx.remote_python,
+        "-B",
         "-m",
         "msys_tools.remote_x11_debug",
         "--runtime-dir",
@@ -3672,6 +3680,7 @@ def _x11_debug_command(
         argv.extend(["--display", display])
     argv.extend(arguments)
     command = (
+        "PYTHONDONTWRITEBYTECODE=1 "
         f"PYTHONPATH={quote_sh(ctx.remote + '/msys-tools')} "
         + " ".join(quote_sh(value) for value in argv)
     )
@@ -3807,6 +3816,7 @@ def command_screenshot(
         return 2
     argv = [
         ctx.remote_python,
+        "-B",
         "-m",
         "msys_tools.remote_screenshot",
         "--runtime-dir",
@@ -3821,6 +3831,7 @@ def command_screenshot(
     if display is not None:
         argv.extend(["--display", display])
     remote_command = (
+        "PYTHONDONTWRITEBYTECODE=1 "
         f"PYTHONPATH={quote_sh(ctx.remote + '/msys-tools')} "
         + " ".join(quote_sh(value) for value in argv)
     )
@@ -4040,6 +4051,7 @@ def command_fast_report(
         quote_sh(value)
         for value in (
             ctx.remote_python,
+            "-B",
             "-m",
             "msys_tools.remote_lifecycle",
             "status",
@@ -4062,7 +4074,7 @@ def command_fast_report(
         ),
         (
             f"PYTHONDONTWRITEBYTECODE=1 PYTHONPATH={quote_sh(ctx.remote + '/msys-tools')} "
-            f"{quote_sh(ctx.remote_python)} -m msys_tools.remote_ctl "
+            f"{quote_sh(ctx.remote_python)} -B -m msys_tools.remote_ctl "
             f"--runtime-dir {quote_sh(runtime_dir)} --method list_components "
             "--payload '{}' --response-only >\"$work/components.json\" 2>&1 || true"
         ),
@@ -4083,6 +4095,7 @@ def command_fast_report(
     if audio:
         audio_argv = [
             ctx.remote_python,
+            "-B",
             "-m",
             "msys_tools.remote_ctl",
             "--runtime-dir",
@@ -4165,6 +4178,7 @@ def command_fast_report(
     if screenshot is not None:
         screenshot_argv = [
             ctx.remote_python,
+            "-B",
             "-m",
             "msys_tools.remote_screenshot",
             "--runtime-dir",
@@ -4746,6 +4760,7 @@ def command_storage(
         return 2
     argv = [
         ctx.remote_python,
+        "-B",
         "-m",
         "msys_tools.remote_storage",
         "--dev-root",
@@ -4990,6 +5005,7 @@ def command_visual_smoke(
         return 2
     argv = [
         ctx.remote_python,
+        "-B",
         "-m",
         "msys_tools.remote_visual_smoke",
         "--runtime-dir",
@@ -5000,6 +5016,7 @@ def command_visual_smoke(
         f"{timeout:g}",
     ]
     command = (
+        "PYTHONDONTWRITEBYTECODE=1 "
         f"PYTHONPATH={quote_sh(ctx.remote + '/msys-tools')} "
         + " ".join(quote_sh(value) for value in argv)
     )
@@ -5059,7 +5076,7 @@ def command_debug_env(ctx: Context, runtime_dir: str) -> int:
     ssh(ctx, (
         "set -x; "
         "uname -a; "
-        f"test -x {quote_sh(ctx.remote_python)} && {quote_sh(ctx.remote_python)} --version; "
+        f"test -x {quote_sh(ctx.remote_python)} && PYTHONDONTWRITEBYTECODE=1 {quote_sh(ctx.remote_python)} -B --version; "
         f"ls -la {quote_sh(ctx.remote)}; "
         f"find {quote_sh(ctx.remote)} -maxdepth 2 -type f -name pyproject.toml -print; "
         f"ls -la {quote_sh(runtime_dir)} 2>/dev/null || true; "
@@ -5089,7 +5106,7 @@ if test -S "$MSYS_RUNTIME_DIR/control.sock"; then
 fi
 mkdir -p "$MSYS_RUNTIME_DIR"
 cd "$MSYS_ROOT"
-set -- -m msys_core.msysd --foreground \\
+set -- -B -m msys_core.msysd --foreground \\
   --config "$MSYS_ROOT/msys-core/examples/config" \\
   --runtime-dir "$MSYS_RUNTIME_DIR" \\
   --profile "$MSYS_PROFILE"
@@ -7507,7 +7524,7 @@ def main(argv: list[str] | None = None) -> int:
                     release_root,
                     args.release_id,
                     args.source_root or remote,
-                    args.entries or [".runtime", *DEFAULT_REPOS],
+                    args.entries or list(COMPOSED_ENTRIES),
                     keep=keep,
                     activate=args.activate,
                     restart_service=args.restart_service,

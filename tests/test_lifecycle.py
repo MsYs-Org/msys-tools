@@ -186,8 +186,34 @@ class RunStopCommandTests(unittest.TestCase):
         status_command = capture.call_args_list[1].args[1]
         self.assertIn("remote_lifecycle 'stop'", stop_command)
         self.assertIn("--runtime-dir '/tmp/one'", stop_command)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", stop_command)
+        self.assertIn("python3' -B -m", stop_command)
         self.assertNotIn("pgrep", stop_command)
         self.assertIn("remote_lifecycle 'status'", status_command)
+
+    def test_remote_control_current_release_python_is_bytecode_guarded(self) -> None:
+        context = dev.Context(
+            Path("/workspace"),
+            "root@device",
+            "/opt/msys-dev",
+            "/opt/msys/current/.runtime/python/bin/python3",
+        )
+        completed = subprocess.CompletedProcess([], 0, stdout="{}\n")
+        with mock.patch.object(dev, "ssh_capture", return_value=completed) as capture:
+            result = dev.remote_control_command(
+                context,
+                "/tmp/msys-main",
+                "list_components",
+                {},
+                capture=True,
+            )
+        self.assertIs(result, completed)
+        command = capture.call_args.args[1]
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", command)
+        self.assertIn(
+            "'/opt/msys/current/.runtime/python/bin/python3' -B -m",
+            command,
+        )
 
     def test_json_inventory_commands_propagate_remote_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -31,7 +31,8 @@ class TapCommandTests(unittest.TestCase):
                 0,
             )
         command = ssh.call_args.args[1]
-        self.assertIn("'-m' 'msys_tools.remote_x11_debug'", command)
+        self.assertIn("'-B' '-m' 'msys_tools.remote_x11_debug'", command)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", command)
         self.assertIn("--runtime-dir' '/tmp/msys-main'", command)
         self.assertIn("'tap' '270' '20' '--identity' 'org.msys.shell.navigation'", command)
         self.assertNotIn("'--display' ':24'", command)

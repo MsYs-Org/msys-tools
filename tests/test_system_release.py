@@ -66,6 +66,13 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
         self.assertEqual(arguments.count("msys-core"), 1)
         self.assertEqual(arguments[-4:], ["--entry", ".runtime", "--entry", "msys-core"])
 
+    def test_default_formal_entry_set_excludes_development_repositories(self) -> None:
+        self.assertEqual(dev.COMPOSED_ENTRIES[0], ".runtime")
+        self.assertIn("msys-core", dev.COMPOSED_ENTRIES)
+        self.assertIn("msys-sdk", dev.COMPOSED_ENTRIES)
+        self.assertNotIn("msys-contracts", dev.COMPOSED_ENTRIES)
+        self.assertNotIn("msys-tools", dev.COMPOSED_ENTRIES)
+
     def test_compose_uses_isolated_python_and_never_switches_release(self) -> None:
         with mock.patch.object(
             dev,

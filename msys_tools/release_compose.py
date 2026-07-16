@@ -23,11 +23,13 @@ from typing import Any, Callable, Iterable, Iterator
 
 COMPOSE_SCHEMA = "msys.release-compose.v1"
 SOURCE_ENTRY_NAMES = (
-    "msys-contracts",
     "msys-core",
     "msys-sdk",
-    "msys-tools",
 )
+SOURCE_ENTRY_PATHS = {
+    "msys-core": ("msys_core", "examples/config"),
+    "msys-sdk": ("msys_sdk",),
+}
 MAF_ENTRY_PACKAGE_IDS = {
     "msys-shell-native": "org.msys.shell.native",
     "msys-shell-pyside": "org.msys.shell.pyside",
@@ -258,17 +260,30 @@ def _reject_python_caches(root: Path) -> None:
         )
 
 
-def _copy_source_tree(source: Path, destination: Path, *, label: str) -> None:
-    resolved = _real_directory(source, label=label)
+def _copy_source_entry(source: Path, destination: Path, *, entry: str) -> None:
+    resolved = _real_directory(source, label=f"source entry {entry}")
     if destination.exists() or destination.is_symlink():
         raise ReleaseComposeError(f"duplicate compose destination: {destination.name}")
-    shutil.copytree(
-        resolved,
-        destination,
-        symlinks=True,
-        ignore=_copy_ignore,
-        copy_function=shutil.copy2,
-    )
+    try:
+        included_paths = SOURCE_ENTRY_PATHS[entry]
+    except KeyError:
+        raise ReleaseComposeError(f"unsupported source entry layout: {entry}") from None
+    destination.mkdir()
+    for relative_text in included_paths:
+        relative = Path(relative_text)
+        source_path = _real_directory(
+            resolved / relative,
+            label=f"source entry {entry}/{relative.as_posix()}",
+        )
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(
+            source_path,
+            target,
+            symlinks=True,
+            ignore=_copy_ignore,
+            copy_function=shutil.copy2,
+        )
 
 
 def _python_runtime(path: Path, *, label: str) -> Path:
@@ -570,9 +585,7 @@ def compose_release_source(
 
         source_metadata: dict[str, dict[str, str]] = {}
         for entry in SOURCE_ENTRY_NAMES:
-            _copy_source_tree(
-                source_entries[entry], staging / entry, label=f"source entry {entry}"
-            )
+            _copy_source_entry(source_entries[entry], staging / entry, entry=entry)
             source_metadata[entry] = {
                 "content_sha256": _tree_digest(staging / entry)
             }

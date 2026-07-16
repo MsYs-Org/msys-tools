@@ -175,6 +175,8 @@ class VisualSmokeHostCommandTests(unittest.TestCase):
         self.assertEqual(status, 0)
         command = capture.call_args.args[1]
         self.assertIn("msys_tools.remote_visual_smoke", command)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", command)
+        self.assertIn("python3' '-B' '-m'", command)
         self.assertIn("'/tmp/msys-main'", command)
         self.assertIn(f"'{COMPONENT}'", command)
         for forbidden in ("xdotool", "--debug-click", "--debug-swipe"):

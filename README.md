@@ -849,7 +849,10 @@ wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev host-se
 
 The formal launcher lives at `/opt/msys/service/msys-service`, resolves and
 pins `/opt/msys/current` at each start, and never runs out of the mutable
-development tree. Subsequent health-gated switches use:
+development tree. Formal compose copies only the Core runtime package and
+configuration examples plus the SDK runtime package; tests, docs,
+`msys-contracts`, and `msys-tools` stay in `/opt/msys-dev`. Subsequent
+health-gated switches use:
 
 ```powershell
 wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev release stage 2026.07.12-2 --activate --restart-service --health-timeout 120

@@ -115,9 +115,20 @@ class ReleaseComposeTests(unittest.TestCase):
         for entry in release_compose.SOURCE_ENTRY_NAMES:
             source = self.root / "workspace" / entry
             source.mkdir(parents=True)
-            (source / "source.txt").write_text(entry + "\n", encoding="utf-8")
+            for relative_text in release_compose.SOURCE_ENTRY_PATHS[entry]:
+                included = source / relative_text
+                included.mkdir(parents=True)
+                (included / "runtime.py").write_text(entry + "\n", encoding="utf-8")
+            (source / "tests").mkdir()
+            (source / "tests" / "not-runtime.py").write_text(
+                "excluded\n", encoding="utf-8"
+            )
+            (source / "README.md").write_text("excluded\n", encoding="utf-8")
             self.sources[entry] = source
-        cache = self.sources["msys-tools"] / "msys_tools" / "__pycache__"
+        extra_examples = self.sources["msys-core"] / "examples" / "demo"
+        extra_examples.mkdir()
+        (extra_examples / "not-config.json").write_text("{}\n", encoding="utf-8")
+        cache = self.sources["msys-core"] / "msys_core" / "__pycache__"
         cache.mkdir(parents=True)
         (cache / "ignored.pyc").write_bytes(b"ignored")
 
@@ -165,6 +176,38 @@ class ReleaseComposeTests(unittest.TestCase):
         self.assertEqual(rejected, [])
         self.assertEqual(os.readlink(self.formal / "current"), current_before)
         self.assertEqual(os.readlink(self.formal / "previous"), previous_before)
+
+    def test_source_entries_contain_only_formal_runtime_paths(self) -> None:
+        result = self.compose()
+        candidate = Path(str(result["path"]))
+
+        self.assertEqual(
+            set(release_compose.SOURCE_ENTRY_NAMES), {"msys-core", "msys-sdk"}
+        )
+        self.assertTrue((candidate / "msys-core/msys_core/runtime.py").is_file())
+        self.assertTrue(
+            (candidate / "msys-core/examples/config/runtime.py").is_file()
+        )
+        self.assertTrue((candidate / "msys-sdk/msys_sdk/runtime.py").is_file())
+        for excluded in (
+            "msys-contracts",
+            "msys-tools",
+            "msys-core/tests",
+            "msys-core/README.md",
+            "msys-core/examples/demo",
+            "msys-sdk/tests",
+            "msys-sdk/README.md",
+        ):
+            self.assertFalse((candidate / excluded).exists(), excluded)
+
+    def test_missing_required_runtime_source_path_is_rejected(self) -> None:
+        (self.sources["msys-core"] / "examples/config/runtime.py").unlink()
+        (self.sources["msys-core"] / "examples/config").rmdir()
+        with self.assertRaisesRegex(
+            release_compose.ReleaseComposeError,
+            "source entry msys-core/examples/config",
+        ):
+            self.compose()
 
     def test_explicit_xft_runtime_replaces_stock_baseline_runtime(self) -> None:
         runtime = self.root / "tk-xft-runtime"
@@ -300,11 +343,20 @@ class ReleaseComposeTests(unittest.TestCase):
 
     def test_reusing_id_after_source_change_is_rejected(self) -> None:
         self.compose()
-        (self.sources["msys-core"] / "source.txt").write_text(
+        (self.sources["msys-core"] / "msys_core/runtime.py").write_text(
             "changed\n", encoding="utf-8"
         )
         with self.assertRaises(release_compose.ImmutableComposeError):
             self.compose()
+
+    def test_excluded_source_change_does_not_change_compose(self) -> None:
+        first = self.compose()
+        (self.sources["msys-core"] / "tests/not-runtime.py").write_text(
+            "changed but excluded\n", encoding="utf-8"
+        )
+        second = self.compose()
+        self.assertTrue(second["already_present"])
+        self.assertEqual(first["content_sha256"], second["content_sha256"])
 
     def test_maf_identity_is_bound_to_release_entry(self) -> None:
         wrong = make_maf(

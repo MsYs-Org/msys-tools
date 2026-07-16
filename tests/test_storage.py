@@ -293,6 +293,8 @@ class StorageHostCommandTests(unittest.TestCase):
         ssh.assert_called_once()
         command = ssh.call_args.args[1]
         self.assertIn("msys_tools.remote_storage", command)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", command)
+        self.assertIn("python3' '-B' '-m'", command)
         self.assertIn(
             "PYTHONPATH='/opt/msys-dev/msys-tools:/opt/msys/current/msys-tools'",
             command,
