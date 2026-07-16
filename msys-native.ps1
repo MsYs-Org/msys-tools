@@ -253,7 +253,7 @@ function Assert-BuildChecksSupported {
     $probeRepositories = @(
         "msys-ui-lvgl", "msys-shell-native", "msys-settings",
         "msys-file-manager", "msys-touch-calibration", "msys-input-touch",
-        "msys-device-info"
+        "msys-device-info", "msys-notes"
     )
     if ($RunTest -and $Name -notin $testRepositories) {
         throw "--test is not supported by repository $Name"
@@ -334,8 +334,12 @@ function Get-TargetBuildCommand {
             return $command
         }
         "msys-notes" {
-            if ($RunTest) { return "cd $stageQ; " + (Get-PythonUnitTestCommand $Stage) }
-            return ":"
+            $uiQ = Quote-Sh ($script:Config.remote + "/msys-ui-lvgl")
+            $targets = @("stage")
+            if ($RunProbe) { $targets += "probe" }
+            $command = "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 UI_ROOT=$uiQ SDK_ROOT=$sdkQ clean; MAKEFLAGS= MFLAGS= make -j1 UI_ROOT=$uiQ SDK_ROOT=$sdkQ $($targets -join ' ')"
+            if ($RunTest) { $command += "; " + (Get-PythonUnitTestCommand $Stage) }
+            return $command
         }
         "msys-openstick-ch347" {
             return "cd $stageQ; chmod 0755 files/x11display/bin/ch347_dirty_usb_sink files/x11display/bin/ch347_st7796_test files/x11display/bin/xdamage_shm_capture scripts/*.sh files/x11display/scripts/*.sh; bash -n scripts/msys_ch347_x11_provider.sh files/x11display/scripts/*.sh"

@@ -62,6 +62,10 @@ class WindowsNativePathTests(unittest.TestCase):
         device_info = case("msys-device-info", "msys-notes")
         self.assertIn('@("all")', device_info)
         self.assertIn('$targets += "probe"', device_info)
+        notes = case("msys-notes", "msys-openstick-ch347")
+        self.assertIn('@("stage")', notes)
+        self.assertIn("UI_ROOT=$uiQ SDK_ROOT=$sdkQ", notes)
+        self.assertIn('$targets += "probe"', notes)
 
     def test_remote_python_disables_bytecode(self) -> None:
         source = (ROOT / "msys-native.ps1").read_text(encoding="utf-8-sig")

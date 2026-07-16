@@ -56,10 +56,8 @@ The native Windows `sync` and `fast` paths build LVGL repositories inside the
 same atomic remote staging transaction. Add `--test`, `--probe`, or both to run
 the repository's bounded unit/runtime checks immediately after that one build;
 the fast path still does not run `doctor`. Calculator and Device Info use their
-root `Makefile` `all` target, File Manager and Input use `stage`, and the shared
-LVGL runtime uses `stage` so package files cannot lag behind the compiled tree.
-Notes remains upload-only until it has a native Makefile, while `--test` runs
-its existing isolated-Python suite.
+root `Makefile` `all` target; File Manager, Input, Notes, and the shared LVGL
+runtime use `stage` so package files cannot lag behind the compiled tree.
 
 Screenshot output paths belong to the workstation: the Windows wrapper maps
 bare relative, `.\`/`..\`, and drive-absolute forms into WSL paths. An already
