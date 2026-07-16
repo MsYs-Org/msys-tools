@@ -36,6 +36,7 @@ class WindowsNativePathTests(unittest.TestCase):
         self.assertIn('"msys-notes"', source)
         self.assertIn('"msys-openstick-ch347"', source)
         self.assertIn('@("start", "stop")', source)
+        self.assertIn('"select-role"', source)
 
     def test_optional_checks_stay_in_the_single_sync_build(self) -> None:
         source = (ROOT / "msys-native.ps1").read_text(encoding="utf-8-sig")

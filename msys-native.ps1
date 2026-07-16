@@ -42,6 +42,7 @@ MSYS native Windows path (no WSL)
   .\msys.cmd --native components
   .\msys.cmd --native start org.msys.settings:main-lvgl
   .\msys.cmd --native stop org.msys.settings:main-lvgl
+  .\msys.cmd --native select-role input-method org.msys.input.touch:keyboard-lvgl
   .\msys.cmd --native call role:hal list_devices {}
 
 Optional config: $script:ConfigPath
@@ -525,6 +526,16 @@ switch ($commandName) {
             throw "$commandName syntax: $commandName PACKAGE:COMPONENT"
         }
         Write-Output (Invoke-RemoteControl -Target "msys.core" -Method $commandName -Payload @{ component = $NativeArgs[0] } -Timeout 30)
+        exit 0
+    }
+    "select-role" {
+        if ($NativeArgs.Count -ne 2 -or
+            $NativeArgs[0] -notmatch "^[A-Za-z0-9._-]+$" -or
+            $NativeArgs[1] -notmatch "^[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$") {
+            throw "select-role syntax: select-role ROLE PACKAGE:COMPONENT"
+        }
+        Write-Output (Invoke-RemoteControl -Target "msys.core" -Method "select_role" `
+            -Payload @{ role = $NativeArgs[0]; provider = $NativeArgs[1] } -Timeout 30)
         exit 0
     }
     "call" {
