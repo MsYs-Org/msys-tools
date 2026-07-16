@@ -400,8 +400,8 @@ class DeliveryCommandTests(unittest.TestCase):
             build_command.index("MAKEFLAGS= MFLAGS= make clean"),
             build_command.index("MAKEFLAGS= MFLAGS= make all"),
         )
-        self.assertIn("--msys-build-probe", build_command)
-        self.assertIn('test "$probe_status" -eq 64', build_command)
+        self.assertNotIn("--msys-build-probe", build_command)
+        self.assertNotIn("probe_status", build_command)
         self.assertIn("bin/msys-x11-policy", build_command)
         record.assert_called_once()
         self.assertEqual(record.call_args.args[2].package_id, "org.msys.x11.session")
@@ -501,12 +501,11 @@ class DeliveryCommandTests(unittest.TestCase):
         self.assertEqual(spec.package_id, "org.msys.audio.bluez")
         build = capture.call_args_list[1].args[1]
         self.assertIn("make -j1 -C native", build)
-        self.assertIn('CC="$compiler" all check', build)
+        self.assertIn('CC="$compiler" all', build)
         self.assertIn("DESTDIR='/opt/msys-dev/.sync/msys-audio.new/files/runtime/aarch64' install", build)
         self.assertIn(spec.relative_path, build)
-        self.assertIn("--self-test", build)
-        self.assertIn("--build-probe", build)
-        self.assertIn("msys-hci-bootstrap 1", build)
+        self.assertNotIn("--self-test", build)
+        self.assertNotIn("--build-probe", build)
         self.assertIn(str(spec.runtime_inventory_path), build)
         self.assertIn(context.remote_python, build)
         self.assertNotIn("MSYS_SDK_DIR=", build)
@@ -556,7 +555,8 @@ class DeliveryCommandTests(unittest.TestCase):
         self.assertIn("MSYS_SDK_DIR='/opt/msys-dev/msys-sdk'", build)
         self.assertIn("/opt/msys-dev/msys-sdk/include/msys/mipc.h", build)
         self.assertIn("/opt/msys-dev/msys-sdk/src/mipc.c", build)
-        self.assertIn("manager check-manager", build)
+        self.assertIn("manager", build)
+        self.assertNotIn("check-manager", build)
         self.assertIn("install-manager", build)
         self.assertIn("msys-audio-manager-native", build)
         record.assert_called_once()
@@ -757,6 +757,8 @@ class DeliveryCommandTests(unittest.TestCase):
                         "artifact": str(artifact),
                         "package": "org.msys.apps",
                         "version": "0.1.0",
+                        "sha256": "a" * 64,
+                        "content_sha256": "c" * 64,
                     },
                 ) as build,
                 mock.patch.object(dev, "command_install_archive", return_value=0) as install,
@@ -782,6 +784,7 @@ class DeliveryCommandTests(unittest.TestCase):
         self.assertTrue(build.call_args.kwargs["force"])
         self.assertEqual(install.call_args.args[1], "/run/msys/main")
         self.assertEqual(install.call_args.args[2], artifact)
+        self.assertEqual(install.call_args.kwargs["built"]["sha256"], "a" * 64)
 
     def test_package_deliver_explicit_maf_format_reaches_build_and_install(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -806,6 +809,8 @@ class DeliveryCommandTests(unittest.TestCase):
                         "package": "org.msys.apps",
                         "version": "0.1.0",
                         "format": "maf",
+                        "sha256": "a" * 64,
+                        "content_sha256": "c" * 64,
                     },
                 ) as build,
                 mock.patch.object(

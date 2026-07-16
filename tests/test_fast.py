@@ -247,9 +247,9 @@ class FastWorkflowTests(unittest.TestCase):
         self.assertIn("disk_available_kib", command)
         self.assertIn("warning|failed", command)
         text = output.getvalue()
-        self.assertIn("healthy=true current_release=r1", text)
-        self.assertIn("org.example:shell state=ready version=1.2.3", text)
-        self.assertIn("display cable loose", text)
+        self.assertIn("health: ok release=r1", text)
+        self.assertNotIn("org.example:shell", text)
+        self.assertNotIn("display cable loose", text)
         self.assertNotIn('"components":', text)
 
     def test_report_can_return_png_without_scp_or_cleanup_calls(self) -> None:
@@ -318,7 +318,7 @@ class FastWorkflowTests(unittest.TestCase):
         self.assertIn("public control socket", command)
         self.assertIn("{n=0; next}", command)
         text = output.getvalue()
-        self.assertIn("current_release=r1", text)
+        self.assertIn("health: ok release=r1", text)
         self.assertIn("component=org.msys.audio.bluez:audio-manager", text)
         self.assertIn("backend=bluealsa", text)
         self.assertIn("reason=controller-not-registered", text)
@@ -491,8 +491,7 @@ class FastWorkflowTests(unittest.TestCase):
                 self.assertEqual(
                     overlays[0].destination.as_posix(), "files/app/msys_sdk"
                 )
-                self.assertIn("automatically overlaying", output.getvalue())
-                self.assertIn(repository, output.getvalue())
+                self.assertNotIn("automatically overlaying", output.getvalue())
 
     def test_batch_package_delivery_skips_source_sync_installs_in_order_and_reports_once(self) -> None:
         repositories = ["msys-settings", "msys-calculator", "msys-input-touch"]

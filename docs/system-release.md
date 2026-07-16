@@ -142,7 +142,7 @@ Stage and select a release. The copy happens on the target, so host and target
 architectures are never mixed:
 
 ```powershell
-python -m msys_tools.dev release stage 2026.07.12-1 --activate --keep 3
+python -m msys_tools.dev release stage 2026.07.12-1 --activate
 python -m msys_tools.dev release verify 2026.07.12-1
 python -m msys_tools.dev release status
 ```
@@ -167,7 +167,7 @@ restart, and wait for Core plus critical roles in one command:
 
 ```powershell
 python -m msys_tools.dev release stage 2026.07.12-2 \
-  --activate --restart-service --keep 3 --health-timeout 120
+  --activate --restart-service --health-timeout 120
 ```
 
 Before it stops the managed formal service, the tool re-hashes both the exact
@@ -205,8 +205,9 @@ python -m msys_tools.dev release rollback \
   --restart-service --health-timeout 120
 ```
 
-Staging prunes to three releases by default. `current`, `previous`, and the
-just-staged release are always protected, even if this retains more than the
+Staging retains two releases by default: the current and previous rollback
+targets. `current`, `previous`, and the just-staged release are always
+protected during staging, even if this temporarily retains more than the
 requested count. Explicit maintenance is available with:
 
 ```powershell

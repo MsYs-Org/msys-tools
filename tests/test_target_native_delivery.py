@@ -143,9 +143,8 @@ class TargetNativeDeliveryTests(unittest.TestCase):
                 side_effect=[
                     completed(0, f"{native_hash}  binary\n"),
                     completed(0, '{"ok":true,"version":"0.2.3"}\n'),
-                    completed(0, f"{native_hash}  binary\n"),
                 ],
-            ),
+            ) as capture,
             mock.patch.object(dev, "ssh") as ssh,
         ):
             marker = dev._record_target_native_artifact(
@@ -157,6 +156,7 @@ class TargetNativeDeliveryTests(unittest.TestCase):
             )
 
         self.assertEqual(marker["sha256"], native_hash)
+        self.assertEqual(capture.call_count, 2)
         self.assertEqual(marker["probe"], {"kind": "self-check", "version": "0.2.3"})
         marker_command = ssh.call_args.args[1]
         self.assertIn(dev.TARGET_NATIVE_MARKER_NAME, marker_command)
@@ -187,9 +187,8 @@ class TargetNativeDeliveryTests(unittest.TestCase):
                     side_effect=[
                         completed(0, f"{native_hash}  binary\n"),
                         probe_result,
-                        completed(0, f"{native_hash}  binary\n"),
                     ],
-                ):
+                ) as capture:
                     checked = dev._probe_remote_native_binary(
                         self.context(Path("/workspace")),
                         f"/opt/msys-dev/{spec.repository}/{spec.relative_path}",
@@ -198,6 +197,7 @@ class TargetNativeDeliveryTests(unittest.TestCase):
                     )
                 self.assertEqual(checked["sha256"], native_hash)
                 self.assertEqual(checked["probe"], expected_probe)
+                self.assertEqual(capture.call_count, 2)
 
     def test_audio_bootstrap_uses_its_real_self_test_and_build_probe(self) -> None:
         spec = dev.TARGET_NATIVE_ARTIFACTS["org.msys.audio.bluez"]
@@ -212,7 +212,6 @@ class TargetNativeDeliveryTests(unittest.TestCase):
                     "msys-hci-bootstrap self-test: ok\n"
                     "msys-hci-bootstrap 1\n",
                 ),
-                completed(0, f"{native_hash}  binary\n"),
             ],
         ) as capture:
             checked = dev._probe_remote_native_binary(
@@ -256,7 +255,6 @@ class TargetNativeDeliveryTests(unittest.TestCase):
                     json.dumps(report)
                     + "\nmsys-audio-manager-native 0.2 candidate\n",
                 ),
-                completed(0, f"{native_hash}  binary\n"),
             ],
         ):
             checked = dev._probe_remote_native_binary(

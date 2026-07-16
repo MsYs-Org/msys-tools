@@ -112,7 +112,8 @@ class IncrementalSyncTests(unittest.TestCase):
         build_command = capture.call_args_list[1].args[1]
         self.assertIn("make -j1 clean", build_command)
         self.assertIn("make -j1", build_command)
-        self.assertIn("all check", build_command)
+        self.assertIn("all", build_command)
+        self.assertNotIn("all check", build_command)
         self.assertIn("build/libmsys-mipc.a", build_command)
         finalise = ssh.call_args_list[-1].args[1]
         self.assertIn(

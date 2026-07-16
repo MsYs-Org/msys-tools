@@ -10,9 +10,6 @@ from .remote_ctl import call
 
 VISUAL_SMOKE_SCHEMA = "msys.visual-smoke.v1"
 DEFAULT_VISUAL_SMOKE_COMPONENT = "org.msys.calculator:calculator"
-LEGACY_COMPONENT_ALIASES = {
-    DEFAULT_VISUAL_SMOKE_COMPONENT: "org.msys.apps:calculator"
-}
 
 
 class VisualSmokeError(RuntimeError):
@@ -61,7 +58,6 @@ def run_visual_smoke(
     caller = rpc_call or call
     requested_component = _component_id(component)
     component = requested_component
-    compatibility: str | None = None
     steps: list[dict[str, Any]] = []
     cleanup: list[dict[str, Any]] = []
     mutation_started = False
@@ -122,19 +118,6 @@ def run_visual_smoke(
             ),
             None,
         )
-        legacy_component = LEGACY_COMPONENT_ALIASES.get(requested_component)
-        if descriptor is None and legacy_component:
-            descriptor = next(
-                (
-                    dict(item)
-                    for item in raw_components
-                    if isinstance(item, dict) and item.get("id") == legacy_component
-                ),
-                None,
-            )
-            if descriptor is not None:
-                component = legacy_component
-                compatibility = "legacy-bundle-component"
         if descriptor is None:
             raise VisualSmokeError(
                 f"test component is not declared: {requested_component}"
@@ -267,8 +250,6 @@ def run_visual_smoke(
         "cleanup": cleanup,
         "restored": not mutation_started or not any("error" in item for item in cleanup),
     }
-    if compatibility:
-        document["compatibility"] = compatibility
     if error is not None:
         document["error"] = error
     return (0 if error is None else 1), document

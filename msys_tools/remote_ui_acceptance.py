@@ -20,11 +20,6 @@ DEFAULT_COMPONENTS = (
     "org.msys.calculator:calculator",
     "org.msys.device-info:device-info",
 )
-LEGACY_COMPONENTS = (
-    "org.msys.apps:notes",
-    "org.msys.apps:calculator",
-    "org.msys.apps:device-info",
-)
 OVERLAY_ROLES = frozenset(
     {
         "control-center",
@@ -522,23 +517,16 @@ def run_p0_ui_acceptance(
         descriptors = {str(item.get("id")): item for item in before}
         if components == DEFAULT_COMPONENTS:
             split_present = [item for item in DEFAULT_COMPONENTS if item in descriptors]
-            legacy_present = [item for item in LEGACY_COMPONENTS if item in descriptors]
-            if not split_present and len(legacy_present) == len(LEGACY_COMPONENTS):
-                components = LEGACY_COMPONENTS
-                component_contract.update(
-                    mode="legacy-bundle-compatibility", selected=list(components)
-                )
-            elif len(split_present) != len(DEFAULT_COMPONENTS):
+            if len(split_present) != len(DEFAULT_COMPONENTS):
                 missing = [item for item in DEFAULT_COMPONENTS if item not in descriptors]
                 component_contract.update(
-                    mode="incomplete-split-migration",
+                    mode="missing-split-packages",
                     present=split_present,
                     missing=missing,
-                    legacy_present=legacy_present,
                 )
                 raise P0UIAcceptanceError(
-                    "split application migration is incomplete; missing="
-                    f"{missing}; install all split packages or restore all legacy components"
+                    "required split application packages are missing: "
+                    f"{missing}"
                 )
         for component in components:
             item = descriptors.get(component)

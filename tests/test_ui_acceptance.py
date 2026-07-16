@@ -10,7 +10,6 @@ from unittest import mock
 from msys_tools import dev
 from msys_tools.remote_ui_acceptance import (
     DEFAULT_COMPONENTS,
-    LEGACY_COMPONENTS,
     P0UIAcceptanceError,
     check_task_switcher_stacking,
     collect_process_memory,
@@ -416,32 +415,6 @@ class P0UIAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(document["component_contract"]["mode"], "split-packages")
 
-    def test_default_route_can_probe_a_pre_split_board_without_changing_defaults(self) -> None:
-        runtime = FakeP0Runtime()
-        identities = tuple(runtime.identities[item] for item in DEFAULT_COMPONENTS)
-        runtime.identities = dict(zip(LEGACY_COMPONENTS, identities))
-        runtime.identities["org.msys.settings:main"] = "org.msys.settings"
-
-        status, document = run_p0_ui_acceptance(
-            "/tmp/msys-main",
-            rpc_call=runtime,
-            sleep=runtime.sleep,
-            thumbnail_probe=fake_thumbnail,
-            memory_probe=fake_memory,
-            display_log="/missing/old-sink.log",
-        )
-
-        self.assertEqual(status, 0)
-        self.assertEqual(document["components"], list(LEGACY_COMPONENTS))
-        self.assertEqual(
-            document["component_contract"],
-            {
-                "mode": "legacy-bundle-compatibility",
-                "requested": list(DEFAULT_COMPONENTS),
-                "selected": list(LEGACY_COMPONENTS),
-            },
-        )
-
     def test_partial_split_migration_fails_before_mutation_with_actionable_ids(self) -> None:
         runtime = FakeP0Runtime()
         runtime.identities.pop("org.msys.calculator:calculator")
@@ -457,7 +430,7 @@ class P0UIAcceptanceTests(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertTrue(document["restored"])
-        self.assertIn("migration is incomplete", document["error"])
+        self.assertIn("split application packages are missing", document["error"])
         self.assertEqual(
             document["component_contract"]["missing"],
             ["org.msys.calculator:calculator"],

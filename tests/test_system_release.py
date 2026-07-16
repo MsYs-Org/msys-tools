@@ -347,6 +347,8 @@ class SystemReleaseDeliveryTests(unittest.TestCase):
                     ["release", "activate", "r1", "--health-timeout", value]
                 )
 
+        self.assertEqual(parser.parse_args(["release", "stage", "r1"]).keep, 2)
+
     def test_release_and_formal_service_cli_are_explicit_opt_in(self) -> None:
         parser = dev.build_parser()
         release = parser.parse_args(

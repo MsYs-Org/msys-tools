@@ -135,7 +135,10 @@ built directly from the Windows/WSL workspace, so their source is not uploaded
 once before the archive is uploaded again. Repositories with target-native ELF
 artifacts (HAL, Native Shell, and X11 policy) still sync/build first. Use
 `--full-sync` when remote development source must also be refreshed. The final
-health/log/screenshot report runs only once after every package succeeds.
+health/log/screenshot report runs only once after every package succeeds. The
+normal output is one build line, one Install Agent result, and one health line;
+exact transport commands and full successful JSON are available with
+`--verbose`. Failure diagnostics remain detailed.
 Delivery is never implicit:
 
 At the workspace root, a bare `\.\msys.cmd q` selects no repository and is a
@@ -997,25 +1000,28 @@ wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev package
 wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev package deliver /mnt/g/Code/MsYs/msys-settings --format maf --output /mnt/g/Code/MsYs/dist --force
 ```
 
-`package deliver` is shorthand for the existing build plus
-`install-archive` flow. `install-archive` itself now requires complete
-`hashes.json` coverage and validates the archive locally before opening any
-upload or install request. The verified file is staged under
+`package deliver` is shorthand for one verified build plus the
+`install-archive` flow. The build result (archive SHA-256, package identity,
+and complete `hashes.json` inspection) is passed directly into upload instead
+of reading and hashing the same archive again. A standalone `install-archive`
+still performs that validation itself. The verified file is staged under
 `$MSYS_STATE_DIR/updates/staged-rpc`, and Tools sends its archive SHA-256,
 package id, and version to `role:install-agent.install_archive`. A zero exit
 status therefore means the typed terminal reply had
 `schema=msys.install-agent-result.v1` and `ok=true`; merely publishing an event
 is not treated as success.
 
-HAL, Native Shell, and X11 policy delivery adds a target-native gate. Run
-`sync --repo REPOSITORY --full-sync` first. The atomic target build executes
-the ELF self-check, version probe, or loader probe and writes a marker binding
+HAL, Native Shell, and X11 policy delivery adds a target-native gate.
+`fast --deliver` runs the required sync automatically. The atomic target build
+executes one ELF self-check, version probe, or loader probe and writes a marker
+binding
 the package id, manifest version, relative path, and ELF SHA-256. Delivery
-refuses a missing, stale, or mismatched marker, downloads that exact target ELF
-into a temporary package copy, leaves the workstation source untouched, and
-checks the ELF hash again inside the finished archive before contacting the
-install agent. A newer manifest therefore cannot silently ship an older cached
-AArch64 binary.
+refuses a missing or mismatched marker, downloads that exact target ELF into a
+temporary package copy, checks the downloaded bytes once against the marker,
+and leaves the workstation source untouched. The normal package build then
+performs its single complete content-hash/archive validation before contacting
+the install agent. A newer manifest therefore cannot silently ship an older
+cached AArch64 binary.
 
 `msys-audio` keeps its established bootstrap-only path as the default, so a
 0.1.11 scan fix can still be synchronized and delivered without a remote SDK.

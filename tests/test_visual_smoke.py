@@ -75,25 +75,6 @@ class VisualSmokeFlowTests(unittest.TestCase):
             "msys.core", "role:window-manager"
         })
 
-    def test_canonical_default_falls_back_only_to_legacy_bundle_component(self) -> None:
-        legacy = "org.msys.apps:calculator"
-        replies = successful_replies(legacy)
-        calls: list[tuple[str, str, dict]] = []
-
-        def rpc(_runtime: str, target: str, method: str, payload: dict, **_kwargs: object) -> dict:
-            calls.append((target, method, payload))
-            return next(replies)
-
-        status, document = run_visual_smoke(
-            "/tmp/msys-main", COMPONENT, rpc_call=rpc
-        )
-
-        self.assertEqual(status, 0)
-        self.assertEqual(document["requested_component"], COMPONENT)
-        self.assertEqual(document["component"], legacy)
-        self.assertEqual(document["compatibility"], "legacy-bundle-component")
-        self.assertIn(("msys.core", "start", {"component": legacy}), calls)
-
     def test_failed_back_stops_test_app_and_restores_home(self) -> None:
         replies = iter([
             returned({

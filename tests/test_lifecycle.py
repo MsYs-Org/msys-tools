@@ -526,6 +526,38 @@ class TypedAgentRequestTests(unittest.TestCase):
             ssh.call_args_list[1].args[1],
         )
 
+    def test_delivery_reuses_build_identity_and_archive_hash_without_revalidating(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "package.maf"
+            archive.write_bytes(b"already verified by build_package")
+            built = {
+                "artifact": str(archive),
+                "package": "org.example.app",
+                "version": "1.2.3",
+                "sha256": "a" * 64,
+                "content_sha256": "c" * 64,
+            }
+            with (
+                mock.patch.object(dev, "validate_package") as validate,
+                mock.patch.object(dev, "_file_sha256") as hash_file,
+                mock.patch.object(dev, "ssh"),
+                mock.patch.object(dev, "run_local"),
+                mock.patch.object(dev, "_typed_agent_request", return_value=0) as request,
+                redirect_stdout(io.StringIO()),
+            ):
+                status = dev.command_install_archive(
+                    self.context(root),
+                    "/tmp/msys-main",
+                    archive,
+                    built=built,
+                )
+
+        self.assertEqual(status, 0)
+        validate.assert_not_called()
+        hash_file.assert_not_called()
+        self.assertEqual(request.call_args.kwargs["payload"]["sha256"], "a" * 64)
+
 
 if __name__ == "__main__":
     unittest.main()

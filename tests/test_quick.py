@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import io
+import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +21,19 @@ class QuickCommandTests(unittest.TestCase):
             remote_python="/opt/msys-dev/.runtime/python/bin/python3",
             ssh_key=None,
         )
+
+    def test_transport_commands_are_quiet_unless_verbose(self) -> None:
+        completed = subprocess.CompletedProcess(["ssh"], 0)
+        with mock.patch.object(dev.subprocess, "run", return_value=completed):
+            quiet = io.StringIO()
+            with mock.patch.object(dev, "_TRANSPORT_VERBOSE", False), redirect_stdout(quiet):
+                dev.run_local(["ssh", "root@device", "true"])
+            verbose = io.StringIO()
+            with mock.patch.object(dev, "_TRANSPORT_VERBOSE", True), redirect_stdout(verbose):
+                dev.run_local(["ssh", "root@device", "true"])
+
+        self.assertEqual(quiet.getvalue(), "")
+        self.assertIn("+ ssh root@device true", verbose.getvalue())
 
     def test_default_is_sync_then_run_without_repeated_full_gates(self) -> None:
         with (
