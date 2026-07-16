@@ -77,8 +77,7 @@ persistent shell, `mf` infers the current `msys-*` repository, including
 
 `--overlay SOURCE=RELATIVE_DEST` is repeatable. If none is supplied for the
 canonical Settings, Notes, Calculator, Device Info, or Input repositories,
-`fast` adds `msys-sdk/msys_sdk=files/app/msys_sdk` automatically. Explicit
-pre-split `msys-apps` delivery keeps this compatibility behavior. An explicit
+`fast` adds `msys-sdk/msys_sdk=files/app/msys_sdk` automatically. An explicit
 overlay list always wins.
 
 A bare `\.\msys.cmd q` at the workspace root is diagnostic-only. Repository
@@ -215,10 +214,10 @@ The current OpenStick acceptance profile is `desktop-spi`. For that profile,
 `doctor` also requires Bash, `xdpyinfo`, an available Xorg or Xvfb executable,
 and isolated-Python `import tkinter`. It reports Xorg/Xvfb availability
 separately. The native X11 policy and CH347 provider are reported as
-`workspace-sync` artifacts, while `/root/x11display` scripts, library, and
-binaries are reported as `x11display-sync` artifacts. Run both sync paths on a
-new target before expecting the final check to pass. Changing the persisted
-profile changes the checks but does not reinstall a component package:
+`workspace-sync` artifacts. The CH347 display runtime itself is installed by
+the normal package flow rather than a second source-tree sync. Changing the
+persisted profile changes the checks but does not reinstall a component
+package:
 
 ```powershell
 wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev doctor --profile desktop-spi
@@ -277,19 +276,6 @@ inside `.sync/msys-x11-session.new` and produce an executable
 `bin/msys-x11-policy`. The build uses an already provisioned compiler/Xlib
 development environment and never invokes a package manager. Failure leaves
 the previous X11 repository active.
-
-The external OpenStick capture/CH347 source tree is deployed independently and
-is also compiled on the target before activation:
-
-```powershell
-wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev sync-x11display --local x11display --destination /root/x11display
-```
-
-The command forces a clean staging build and verifies the five Makefile runtime
-targets before swapping directories. A failure keeps `/root/x11display`
-unchanged and removes `/root/x11display.new` plus the incoming archive. This
-prevents a newer capture source, including first-frame fixes, from being
-deployed beside an older bundled `aarch64` binary.
 
 A persisted custom `repos` list remains an intentional subset. Older setups
 must include `msys-x11-session` explicitly, or use `config unset repos` to
@@ -508,21 +494,9 @@ already provisioned `scrot`, and falls back to an already provisioned
 The random remote temporary file is quoted, downloaded with the configured SSH
 key/ControlMaster transport, validated as PNG, and removed on every exit path.
 
-To exercise navigation semantics rather than pointer coordinates, first close
-all user applications and overlays so Home is clean, then run:
-
-```powershell
-wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev visual-smoke
-```
-
-The omitted component defaults to `org.msys.calculator:calculator`. A board
-that has no split application components yet may use the legacy calculator ID;
-the result marks that compatibility selection explicitly.
-
-This uses only typed Core/window-manager calls for Home, start, Back, and
-Recents. It refuses a running test component or non-empty user-window state;
-after mutation it cleans up only the component it started and restores Home,
-including on a failed intermediate assertion.
+Use `ui-accept` for the complete navigation and rendering acceptance route; it
+replaces the former standalone navigation smoke command and needs only one SSH
+session.
 
 ## Persistent startup without systemd
 

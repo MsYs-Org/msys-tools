@@ -429,14 +429,12 @@ class FastWorkflowTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertTrue(fast.call_args.kwargs["audio"])
 
-    def test_canonical_split_apps_and_legacy_bundle_get_required_sdk_overlay(self) -> None:
+    def test_canonical_packages_get_required_sdk_overlay(self) -> None:
         for repository, package_id in (
             ("msys-settings", "org.msys.settings"),
             ("msys-notes", "org.msys.notes"),
             ("msys-calculator", "org.msys.calculator"),
             ("msys-device-info", "org.msys.device-info"),
-            # Explicit compatibility delivery remains supported.
-            ("msys-apps", "org.msys.apps"),
             ("msys-input-touch", "org.msys.input.touch"),
         ):
             with self.subTest(repository=repository), tempfile.TemporaryDirectory() as temporary:

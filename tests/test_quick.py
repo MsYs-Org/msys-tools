@@ -96,7 +96,7 @@ class QuickCommandTests(unittest.TestCase):
         ):
             result = dev.command_quick(
                 self.context(),
-                ["msys-settings", "msys-apps"],
+                ["msys-settings", "msys-notes"],
                 safe=True,
                 profile="desktop-spi",
                 runtime_dir="/tmp/quick",
@@ -285,7 +285,7 @@ class QuickCommandTests(unittest.TestCase):
                     ]
                 )
                 alias_result = dev.main(
-                    ["deploy", "--root", str(root), "--repo", "msys-apps"]
+                    ["deploy", "--root", str(root), "--repo", "msys-notes"]
                 )
 
         self.assertEqual(result, 0)
@@ -308,7 +308,7 @@ class QuickCommandTests(unittest.TestCase):
                 "full_sync": False,
             },
         )
-        self.assertEqual(quick.call_args_list[1].args[1], ["msys-apps"])
+        self.assertEqual(quick.call_args_list[1].args[1], ["msys-notes"])
 
 
 if __name__ == "__main__":

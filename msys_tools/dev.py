@@ -34,11 +34,6 @@ from .package_flow import (
     sign_update_index_file,
     validate_package,
 )
-from .fallback_manifests import (
-    FallbackManifestError,
-    check_fallback_manifests,
-    generate_fallback_manifests,
-)
 from .host_service import (
     BACKENDS as HOST_SERVICE_BACKENDS,
     HostServiceError,
@@ -135,7 +130,6 @@ INSTALL_AGENT_RESULT_SCHEMA = "msys.install-agent-result.v1"
 SHIELD_CONTROL_SCHEMA = "msys.shield-control.v1"
 SHIELD_STATUS_SCHEMA = "msys.screen-shield.status.v1"
 DOCTOR_PROBE_PREFIX = "__MSYS_DOCTOR_V2__"
-DEFAULT_X11DISPLAY_REMOTE = "/root/x11display"
 DEFAULT_SYSTEM_RELEASE_ROOT = "/opt/msys"
 FAST_DELIVERY_RELEASE_INPUTS = frozenset({"msys-core", "msys-tools"})
 FAST_DELIVERY_SDK_REPOSITORIES = frozenset(
@@ -145,19 +139,9 @@ FAST_DELIVERY_SDK_REPOSITORIES = frozenset(
         "msys-calculator",
         "msys-device-info",
         "msys-input-touch",
-        # Explicit compatibility delivery for pre-split workspaces.
-        "msys-apps",
     }
 )
-DEFAULT_VISUAL_SMOKE_COMPONENT = "org.msys.calculator:calculator"
 FAST_DELIVERY_SDK_OVERLAY = "msys-sdk/msys_sdk=files/app/msys_sdk"
-X11DISPLAY_RUNTIME_BINARIES = (
-    "bin/ch347_dirty_usb_sink",
-    "bin/ch347_st7796_test",
-    "bin/ch347_irq_test",
-    "bin/ch347_app_gate",
-    "bin/xdamage_shm_capture",
-)
 
 # Transport commands are intentionally quiet in the normal edit/deploy loop.
 # A failed operation already reports its own bounded diagnostic; developers who
@@ -553,39 +537,6 @@ def command_config(args: argparse.Namespace) -> int:
     raise ValueError(args.config_command)
 
 
-def command_fallback_manifests(root: Path, *, check: bool) -> int:
-    try:
-        if check:
-            differences = check_fallback_manifests(root)
-            if differences:
-                for difference in differences:
-                    print(
-                        f"fallback-manifests: {difference.path}: {difference.reason}",
-                        file=sys.stderr,
-                    )
-                    if difference.diff:
-                        print(difference.diff, file=sys.stderr)
-                print(
-                    f"fallback-manifests: {len(differences)} fallback manifest(s) are stale; "
-                    "run without --check to regenerate",
-                    file=sys.stderr,
-                )
-                return 1
-            print("fallback-manifests: all canonical fallbacks are up to date")
-            return 0
-
-        paths = generate_fallback_manifests(root)
-        for path in paths:
-            print(f"generated {path}")
-        return 0
-    except FallbackManifestError as exc:
-        print(f"fallback-manifests: {exc}", file=sys.stderr)
-        return 2
-    except OSError as exc:
-        print(f"fallback-manifests: cannot update fallback manifests: {exc}", file=sys.stderr)
-        return 2
-
-
 def _doctor_display_mode(root: Path, profile: str) -> str:
     """Infer the configured display architecture from its local profile."""
     providers: list[str] = []
@@ -650,22 +601,6 @@ def command_doctor(ctx: Context, profile: str = "mobile-spi") -> int:
         print(f"[missing] workspace repositories: {', '.join(missing_repos)}")
     else:
         print(f"[ok] workspace repositories: {len(paths)}")
-    try:
-        manifest_report = discover_manifests(ctx.root, ctx.root)
-        invalid = [row for row in manifest_report["manifests"] if not row["valid"]]
-        if invalid:
-            failed_required = True
-            print(
-                f"[invalid] manifests: {len(invalid)}/{manifest_report['count']} invalid"
-            )
-            for row in invalid:
-                print(f"  {row['path']}: {row['error']}")
-        else:
-            print(f"[ok] manifests: {manifest_report['count']} strictly validated")
-    except PackageFlowError as exc:
-        failed_required = True
-        print(f"[invalid] manifests: {exc}")
-
     if failed_required and not shutil.which("ssh"):
         print("doctor: local prerequisites are missing", file=sys.stderr)
         return 2
@@ -683,18 +618,6 @@ def command_doctor(ctx: Context, profile: str = "mobile-spi") -> int:
     ch347_provider_script = quote_sh(
         f"{ctx.remote}/msys-x11-session/scripts/msys_ch347_x11_provider.sh"
     )
-    x11display_root = DEFAULT_X11DISPLAY_REMOTE
-    ch347_start_script = quote_sh(
-        f"{x11display_root}/scripts/start_ch347_dirty_usb_x11.sh"
-    )
-    ch347_stop_script = quote_sh(
-        f"{x11display_root}/scripts/stop_ch347_dirty_usb_x11.sh"
-    )
-    ch347_library = quote_sh(f"{x11display_root}/ch347/libch347spi.so")
-    ch347_binaries = " ".join(
-        quote_sh(f"{x11display_root}/{relative}")
-        for relative in X11DISPLAY_RUNTIME_BINARIES
-    )
     prefix = DOCTOR_PROBE_PREFIX
     script = f"""set +e
 export PYTHONDONTWRITEBYTECODE=1
@@ -709,15 +632,6 @@ check_executable_file() {{
     check_name=$1
     check_path=$2
     if test -f "$check_path" && test -x "$check_path" && test ! -L "$check_path"; then
-        emit "$check_name" ok "$check_path"
-    else
-        emit "$check_name" missing "$check_path"
-    fi
-}}
-check_regular_file() {{
-    check_name=$1
-    check_path=$2
-    if test -f "$check_path" && test -r "$check_path" && test ! -L "$check_path"; then
         emit "$check_name" ok "$check_path"
     else
         emit "$check_name" missing "$check_path"
@@ -772,21 +686,6 @@ check_executable_file native-shell {native_shell}
 check_executable_file native-hal {native_hal}
 check_executable_file native-core-lite {native_core_lite}
 check_executable_file ch347-provider-script {ch347_provider_script}
-check_executable_file ch347-start-script {ch347_start_script}
-check_executable_file ch347-stop-script {ch347_stop_script}
-check_regular_file ch347-library {ch347_library}
-ch347_binary_error=""
-for artifact in {ch347_binaries}; do
-    if ! test -f "$artifact" || ! test -x "$artifact" || test -L "$artifact"; then
-        ch347_binary_error="$artifact"
-        break
-    fi
-done
-if test -z "$ch347_binary_error"; then
-    emit ch347-runtime-binaries ok "5 verified under {x11display_root}/bin"
-else
-    emit ch347-runtime-binaries missing "$ch347_binary_error"
-fi
 if command -v uname >/dev/null 2>&1; then
     machine=$(uname -m 2>/dev/null)
     kernel=$(uname -sr 2>/dev/null)
@@ -814,10 +713,6 @@ fi
         "native-hal": "workspace-sync",
         "native-core-lite": "workspace-sync",
         "ch347-provider-script": "workspace-sync",
-        "ch347-start-script": "x11display-sync",
-        "ch347-stop-script": "x11display-sync",
-        "ch347-library": "x11display-sync",
-        "ch347-runtime-binaries": "x11display-sync",
     }
     if display_mode != "headless":
         profile_required_remote.update(
@@ -831,10 +726,6 @@ fi
         deployment_required_remote.update(
             {
                 "ch347-provider-script",
-                "ch347-start-script",
-                "ch347-stop-script",
-                "ch347-library",
-                "ch347-runtime-binaries",
             }
         )
     expected_required = (
@@ -928,19 +819,6 @@ fi
                 "doctor: workspace-sync artifacts are missing: "
                 + ", ".join(missing_workspace)
                 + "; run `msys-dev sync --repo msys-x11-session`",
-                file=sys.stderr,
-            )
-        missing_x11display = sorted(
-            name
-            for name in deployment_required_remote
-            if deployment_stages.get(name) == "x11display-sync"
-            and statuses.get(name) != "ok"
-        )
-        if missing_x11display:
-            print(
-                "doctor: x11display-sync artifacts are missing: "
-                + ", ".join(missing_x11display)
-                + "; run `msys-dev sync-x11display` after provisioning build tools",
                 file=sys.stderr,
             )
         return 1
@@ -1870,76 +1748,6 @@ if sorted(matches, key=lambda item: item["path"]) != sorted(entries, key=lambda 
                 return 2
         finalise(path.name, staging, fingerprints[path.name])
         print(f"synced {path.name} -> {ctx.target}:{ctx.remote}/{path.name}")
-    return 0
-
-
-def command_sync_x11display(ctx: Context, local_path: Path, remote_path: str) -> int:
-    if not local_path.is_dir():
-        print(f"x11display path not found: {local_path}", file=sys.stderr)
-        return 2
-    remote_posix = PurePosixPath(remote_path)
-    if not remote_posix.is_absolute() or remote_posix == PurePosixPath("/") or ".." in remote_posix.parts:
-        print("x11display destination must be a non-root absolute POSIX path", file=sys.stderr)
-        return 2
-    remote_parent = remote_posix.parent.as_posix()
-    incoming = f"{remote_path}.incoming.tar"
-    backup = f"{remote_path}.previous"
-    staging = f"{remote_path}.new"
-    runtime_artifacts = " ".join(
-        quote_sh(f"{staging}/{relative}")
-        for relative in X11DISPLAY_RUNTIME_BINARIES
-    )
-    with tempfile.TemporaryDirectory(prefix="msys-x11display-") as temporary:
-        archive = Path(temporary) / "x11display-deploy.tar"
-        run_local([
-            "tar",
-            "--exclude=.git",
-            "--exclude=__pycache__",
-            "-cf",
-            str(archive),
-            "-C", str(local_path),
-            ".",
-        ])
-        try:
-            ssh(ctx, f"mkdir -p {quote_sh(remote_parent)}")
-            run_local([
-                *scp_base_args(ctx),
-                str(archive),
-                f"{ctx.target}:{incoming}",
-            ])
-            ssh(ctx, (
-                "set -eu; "
-                f"rm -rf {quote_sh(staging)} && mkdir -p {quote_sh(staging)}; "
-                f"tar -xf {quote_sh(incoming)} -C {quote_sh(staging)}; "
-                f"test -f {quote_sh(staging + '/Makefile')}; "
-                f"test ! -L {quote_sh(staging + '/Makefile')}; "
-                f"test -f {quote_sh(staging + '/scripts/start_ch347_dirty_usb_x11.sh')}; "
-                "command -v make >/dev/null 2>&1 || { "
-                "echo 'x11display target build requires make' >&2; exit 127; }; "
-                f"cd {quote_sh(staging)}; "
-                "MAKEFLAGS= MFLAGS= make clean; "
-                "MAKEFLAGS= MFLAGS= make all; "
-                f"for artifact in {runtime_artifacts}; do "
-                "test -f \"$artifact\"; test -x \"$artifact\"; "
-                "test ! -L \"$artifact\"; done; "
-                f"rm -f {quote_sh(incoming)}; "
-                f"rm -rf {quote_sh(backup)}; moved_old=0; "
-                f"if test -e {quote_sh(remote_path)}; then "
-                f"mv {quote_sh(remote_path)} {quote_sh(backup)}; moved_old=1; fi; "
-                f"if mv {quote_sh(staging)} {quote_sh(remote_path)}; then :; else "
-                "status=$?; "
-                f"if test \"$moved_old\" = 1 && test ! -e {quote_sh(remote_path)}; then "
-                f"mv {quote_sh(backup)} {quote_sh(remote_path)}; fi; "
-                "exit \"$status\"; fi"
-            ))
-        except Exception:
-            ssh(
-                ctx,
-                f"rm -rf {quote_sh(staging)}; rm -f {quote_sh(incoming)}",
-                check=False,
-            )
-            raise
-    print(f"synced {local_path} -> {ctx.target}:{remote_path}")
     return 0
 
 
@@ -4985,47 +4793,6 @@ def command_font_doctor(
     return completed.returncode
 
 
-def command_visual_smoke(
-    ctx: Context,
-    runtime_dir: str,
-    component: str,
-    *,
-    timeout: float,
-) -> int:
-    if (
-        not component
-        or ":" not in component
-        or len(component) > 255
-        or any(ord(character) < 33 or ord(character) > 126 for character in component)
-    ):
-        print(
-            "visual-smoke: component must be a package:component identifier",
-            file=sys.stderr,
-        )
-        return 2
-    argv = [
-        ctx.remote_python,
-        "-B",
-        "-m",
-        "msys_tools.remote_visual_smoke",
-        "--runtime-dir",
-        runtime_dir,
-        "--component",
-        component,
-        "--timeout",
-        f"{timeout:g}",
-    ]
-    command = (
-        "PYTHONDONTWRITEBYTECODE=1 "
-        f"PYTHONPATH={quote_sh(ctx.remote + '/msys-tools')} "
-        + " ".join(quote_sh(value) for value in argv)
-    )
-    result = ssh_capture(ctx, command)
-    if result.stdout:
-        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
-    return result.returncode
-
-
 def command_ui_acceptance(
     ctx: Context,
     runtime_dir: str,
@@ -5070,69 +4837,6 @@ def command_ui_acceptance(
     if result.stdout:
         print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
     return result.returncode
-
-
-def command_debug_env(ctx: Context, runtime_dir: str) -> int:
-    ssh(ctx, (
-        "set -x; "
-        "uname -a; "
-        f"test -x {quote_sh(ctx.remote_python)} && PYTHONDONTWRITEBYTECODE=1 {quote_sh(ctx.remote_python)} -B --version; "
-        f"ls -la {quote_sh(ctx.remote)}; "
-        f"find {quote_sh(ctx.remote)} -maxdepth 2 -type f -name pyproject.toml -print; "
-        f"ls -la {quote_sh(runtime_dir)} 2>/dev/null || true; "
-        f"test -S {quote_sh(runtime_dir + '/control.sock')} && echo socket=ok || echo socket=missing; "
-        "pgrep -af 'msys_core.msysd|msys_install|msys_shell' || true"
-    ))
-    return 0
-
-
-def command_script(output: Path, remote: str) -> int:
-    remote_default = quote_sh(remote)
-    text = f"""#!/bin/sh
-set -eu
-MSYS_ROOT_DEFAULT={remote_default}
-MSYS_ROOT="${{MSYS_ROOT:-$MSYS_ROOT_DEFAULT}}"
-MSYS_RUNTIME_DIR="${{MSYS_RUNTIME_DIR:-/run/msys/main}}"
-MSYS_PROFILE="${{MSYS_PROFILE:-mobile-spi}}"
-MSYS_PYTHON="${{MSYS_PYTHON:-$MSYS_ROOT/.runtime/python/bin/python3}}"
-export MSYS_PLATFORM_PYTHONPATH="${{MSYS_PLATFORM_PYTHONPATH:-$MSYS_ROOT/msys-sdk}}"
-export PYTHONDONTWRITEBYTECODE=1
-export MALLOC_ARENA_MAX="${{MALLOC_ARENA_MAX:-2}}"
-export MALLOC_TRIM_THRESHOLD_="${{MALLOC_TRIM_THRESHOLD_:-262144}}"
-export PYTHONPATH="$MSYS_ROOT/msys-core:$MSYS_ROOT/msys-sdk:$MSYS_ROOT/msys-shell-pyside:$MSYS_ROOT/msys-x11-session:$MSYS_ROOT/msys-hal:$MSYS_ROOT/msys-input-touch/files/app:$MSYS_ROOT/msys-install"
-if test -S "$MSYS_RUNTIME_DIR/control.sock"; then
-  echo "refusing to start a duplicate msysd; stop the existing session first" >&2
-  exit 73
-fi
-mkdir -p "$MSYS_RUNTIME_DIR"
-cd "$MSYS_ROOT"
-set -- -B -m msys_core.msysd --foreground \\
-  --config "$MSYS_ROOT/msys-core/examples/config" \\
-  --runtime-dir "$MSYS_RUNTIME_DIR" \\
-  --profile "$MSYS_PROFILE"
-native_shell_manifest="$MSYS_ROOT/msys-shell-native/manifest.json"
-shell_manifest="$MSYS_ROOT/msys-shell-pyside/manifest.json"
-hal_manifest="$MSYS_ROOT/msys-hal/manifest.json"
-x11_session_manifest="$MSYS_ROOT/msys-x11-session/manifest.json"
-ch347_manifest="$MSYS_ROOT/msys-openstick-ch347/manifest.json"
-input_manifest="$MSYS_ROOT/msys-input-touch/manifest.json"
-install_manifest="$MSYS_ROOT/msys-install/manifest.json"
-test ! -f "$native_shell_manifest" || set -- "$@" --manifest "$native_shell_manifest"
-test ! -f "$shell_manifest" || set -- "$@" --manifest "$shell_manifest"
-if test -f "$hal_manifest"; then
-  set -- "$@" --manifest "$hal_manifest"
-fi
-test ! -f "$x11_session_manifest" || set -- "$@" --manifest "$x11_session_manifest"
-if test -f "$ch347_manifest"; then
-  set -- "$@" --manifest "$ch347_manifest"
-fi
-test ! -f "$input_manifest" || set -- "$@" --manifest "$input_manifest"
-test ! -f "$install_manifest" || set -- "$@" --manifest "$install_manifest"
-exec "$MSYS_PYTHON" "$@"
-"""
-    output.write_text(text, encoding="utf-8", newline="\n")
-    print(output)
-    return 0
 
 
 def _normalise_remote_release_root(value: str) -> str:
@@ -6284,25 +5988,6 @@ def build_parser() -> argparse.ArgumentParser:
     accept.add_argument("--force", action="store_true")
     accept.add_argument("--json", action="store_true")
 
-    fallback_manifests = sub.add_parser(
-        "fallback-manifests",
-        parents=[common],
-        help="generate Core development fallbacks from canonical manifests",
-    )
-    fallback_manifests.add_argument(
-        "--check",
-        action="store_true",
-        help="report semantic drift without changing files",
-    )
-
-    sync_x11 = sub.add_parser(
-        "sync-x11display",
-        parents=[common],
-        help="build x11display in remote staging and atomically activate it",
-    )
-    sync_x11.add_argument("--local", default="x11display")
-    sync_x11.add_argument("--destination", default="/root/x11display")
-
     run_cmd = sub.add_parser("run", parents=[common])
     run_cmd.add_argument("--profile")
     run_cmd.add_argument("--runtime-dir")
@@ -6856,17 +6541,6 @@ def build_parser() -> argparse.ArgumentParser:
     font_doctor.add_argument("--size", type=int, default=16)
     font_doctor.add_argument("--runtime-dir")
 
-    visual_smoke = sub.add_parser(
-        "visual-smoke",
-        parents=[common],
-        help="exercise typed Home/start/Back/Recents from a clean Home session",
-    )
-    visual_smoke.add_argument(
-        "component", nargs="?", default=DEFAULT_VISUAL_SMOKE_COMPONENT
-    )
-    visual_smoke.add_argument("--timeout", type=_bounded_timeout, default=12.0)
-    visual_smoke.add_argument("--runtime-dir")
-
     ui_accept = sub.add_parser(
         "ui-accept",
         aliases=["p0-ui"],
@@ -6895,12 +6569,6 @@ def build_parser() -> argparse.ArgumentParser:
     shield.add_argument("action", choices=["show", "hide"])
     shield.add_argument("--timeout", type=_bounded_timeout, default=DEFAULT_RUN_TIMEOUT)
     shield.add_argument("--runtime-dir")
-
-    debug_env = sub.add_parser("debug-env", parents=[common])
-    debug_env.add_argument("--runtime-dir")
-
-    script = sub.add_parser("install-service-script", parents=[common])
-    script.add_argument("output")
 
     return parser
 
@@ -6955,9 +6623,7 @@ def main(argv: list[str] | None = None) -> int:
     if CONTROL_PERSIST_PATTERN.fullmatch(ssh_control_persist) is None:
         parser.error("SSH ControlPersist must be yes, no, or a duration such as 10m")
     local_only = (
-        args.command == "install-service-script"
-        or args.command == "config"
-        or args.command == "fallback-manifests"
+        args.command == "config"
         or (args.command == "runtime" and args.runtime_command in {"fetch", "make"})
         or (
             args.command == "update-trust"
@@ -7227,13 +6893,6 @@ def main(argv: list[str] | None = None) -> int:
                 ctx, command, display_command=label
             ),
         )
-    if args.command == "fallback-manifests":
-        return command_fallback_manifests(root, check=args.check)
-    if args.command == "sync-x11display":
-        local_path = Path(args.local)
-        if not local_path.is_absolute():
-            local_path = root / local_path
-        return command_sync_x11display(ctx, local_path.resolve(), args.destination)
     if args.command == "run":
         runtime_dir = args.runtime_dir or config.get("runtime_dir", "/run/msys/main")
         log_file = args.log_file or config.get("log_file", "/tmp/msysd.log")
@@ -7741,13 +7400,6 @@ def main(argv: list[str] | None = None) -> int:
             family=args.family,
             size=args.size,
         )
-    if args.command == "visual-smoke":
-        return command_visual_smoke(
-            ctx,
-            args.runtime_dir or config.get("runtime_dir", "/run/msys/main"),
-            args.component,
-            timeout=args.timeout,
-        )
     if args.command in {"ui-accept", "p0-ui"}:
         return command_ui_acceptance(
             ctx,
@@ -7770,10 +7422,6 @@ def main(argv: list[str] | None = None) -> int:
             args.action,
             timeout=args.timeout,
         )
-    if args.command == "debug-env":
-        return command_debug_env(ctx, args.runtime_dir or config.get("runtime_dir", "/run/msys/main"))
-    if args.command == "install-service-script":
-        return command_script(Path(args.output), args.remote)
     parser.error("unknown command")
     return 2
 

@@ -393,24 +393,6 @@ class PackageFlowTests(unittest.TestCase):
             self.assertEqual(len(invalid_rows), 1)
             self.assertIn("invalid", invalid_rows[0]["error"])
 
-    def test_workspace_discovery_finds_msys_apps_root_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            apps_manifest = root / "msys-apps" / "manifest.json"
-            apps_manifest.parent.mkdir()
-            data = manifest()
-            data["package"].update(
-                {"id": "org.msys.apps", "name": "MSYS Applications", "version": "0.1.0"}
-            )
-            apps_manifest.write_text(json.dumps(data), encoding="utf-8")
-
-            result = discover_manifests(WORKSPACE, root)
-
-        self.assertTrue(result["valid"])
-        self.assertEqual(result["count"], 1)
-        self.assertEqual(result["manifests"][0]["package"], "org.msys.apps")
-        self.assertEqual(Path(result["manifests"][0]["path"]), apps_manifest)
-
     def test_remote_rollback_uses_typed_install_agent_rpc(self) -> None:
         context = dev.Context(
             root=WORKSPACE,

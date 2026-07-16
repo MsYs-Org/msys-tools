@@ -46,9 +46,9 @@ class PersistentConfigTests(unittest.TestCase):
                         "--repo",
                         "msys-x11-session",
                         "--repo",
-                        " msys-apps ",
+                        " msys-notes ",
                         "--repo",
-                        "msys-apps",
+                        "msys-notes",
                     ]
                 )
                 data = dev.load_config()
@@ -58,7 +58,7 @@ class PersistentConfigTests(unittest.TestCase):
             self.assertEqual(data["runtime_dir"], "/tmp/msys-main")
             self.assertEqual(data["ssh_control_persist"], "15m")
             self.assertEqual(
-                data["repos"], ["msys-core", "msys-x11-session", "msys-apps"]
+                data["repos"], ["msys-core", "msys-x11-session", "msys-notes"]
             )
             self.assertFalse(list(config.parent.glob(".config.json.*.tmp")))
 
@@ -145,22 +145,6 @@ class DoctorTests(unittest.TestCase):
                 "ok",
                 "/opt/msys-dev/msys-x11-session/scripts/msys_ch347_x11_provider.sh",
             ),
-            "ch347-start-script": (
-                "ok",
-                "/root/x11display/scripts/start_ch347_dirty_usb_x11.sh",
-            ),
-            "ch347-stop-script": (
-                "ok",
-                "/root/x11display/scripts/stop_ch347_dirty_usb_x11.sh",
-            ),
-            "ch347-library": (
-                "ok",
-                "/root/x11display/ch347/libch347spi.so",
-            ),
-            "ch347-runtime-binaries": (
-                "ok",
-                "5 verified under /root/x11display/bin",
-            ),
             "architecture": ("ok", "aarch64"),
             "kernel": ("ok", "Linux 5.15"),
             "remote-root": ("ok", "writable"),
@@ -187,7 +171,6 @@ class DoctorTests(unittest.TestCase):
             for name, (status, detail) in rows.items()
         )
         completed = subprocess.CompletedProcess([], 0, stdout=output)
-        manifest_report = {"valid": True, "count": 3, "manifests": []}
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
@@ -195,9 +178,6 @@ class DoctorTests(unittest.TestCase):
                 dev.shutil,
                 "which",
                 side_effect=lambda name: None if name == "rsync" else f"/bin/{name}",
-            ),
-            mock.patch.object(
-                dev, "discover_manifests", return_value=manifest_report
             ),
             mock.patch.object(
                 dev, "ssh_capture", return_value=completed
@@ -262,15 +242,13 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("[profile-required] target:bash", stdout)
         self.assertIn("isolated-python-tkinter", stderr)
 
-    def test_doctor_build_and_ch347_stages_are_required_and_actionable(self) -> None:
+    def test_doctor_build_and_provider_stages_are_required_and_actionable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             rows = self.complete_rows()
             rows["native-build-make"] = ("missing", "")
             rows["native-build-cc"] = ("missing", "")
             rows["native-build-cxx"] = ("missing", "")
             rows["ch347-provider-script"] = ("missing", "/missing/provider")
-            rows["ch347-start-script"] = ("missing", "/missing/start")
-            rows["ch347-library"] = ("missing", "/missing/library")
             failed, stdout, stderr, _capture = self.run_doctor(
                 Path(temporary), rows
             )
@@ -280,9 +258,7 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("stage=source-build", stdout)
         self.assertIn("[deploy-required] target:ch347-provider-script", stdout)
         self.assertIn("stage=workspace-sync", stdout)
-        self.assertIn("stage=x11display-sync", stdout)
         self.assertIn("will not invoke a package manager", stderr)
-        self.assertIn("sync-x11display", stderr)
 
 
 class DeliveryCommandTests(unittest.TestCase):
@@ -313,8 +289,8 @@ class DeliveryCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             context_repos = (
-                " msys-x11-session,msys-apps,msys-core,"
-                "msys-apps,msys-x11-session "
+                " msys-x11-session,msys-notes,msys-core,"
+                "msys-notes,msys-x11-session "
             )
             with (
                 mock.patch.dict(
@@ -332,7 +308,7 @@ class DeliveryCommandTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(
-            sync.call_args.args[1], ["msys-x11-session", "msys-apps", "msys-core"]
+            sync.call_args.args[1], ["msys-x11-session", "msys-notes", "msys-core"]
         )
 
     def test_sync_fallback_stages_then_swaps_repository(self) -> None:
@@ -570,70 +546,6 @@ class DeliveryCommandTests(unittest.TestCase):
             ],
         )
 
-    def test_x11display_sync_rebuilds_and_verifies_staging_before_swap(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / "x11display"
-            source.mkdir()
-            context = self.context(root)
-            with (
-                mock.patch.object(dev, "run_local"),
-                mock.patch.object(dev, "ssh") as ssh,
-            ):
-                result = dev.command_sync_x11display(
-                    context, source, "/root/x11display"
-                )
-
-        self.assertEqual(result, 0)
-        deploy = ssh.call_args_list[1].args[1]
-        self.assertIn("/root/x11display.new", deploy)
-        self.assertIn("MAKEFLAGS= MFLAGS= make clean", deploy)
-        self.assertIn("MAKEFLAGS= MFLAGS= make all", deploy)
-        for relative in dev.X11DISPLAY_RUNTIME_BINARIES:
-            self.assertIn(f"/root/x11display.new/{relative}", deploy)
-        self.assertIn('test -x "$artifact"', deploy)
-        self.assertIn('test ! -L "$artifact"', deploy)
-        syntax = subprocess.run(
-            ["sh", "-n"], input=deploy, text=True, capture_output=True
-        )
-        self.assertEqual(syntax.returncode, 0, syntax.stderr)
-        build_position = deploy.index("MAKEFLAGS= MFLAGS= make all")
-        swap_position = deploy.index(
-            "mv '/root/x11display.new' '/root/x11display'"
-        )
-        self.assertLess(build_position, swap_position)
-        self.assertLess(deploy.index("rm -f '/root/x11display.incoming.tar'"), swap_position)
-
-    def test_x11display_build_failure_cleans_transient_paths_without_swap(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / "x11display"
-            source.mkdir()
-            context = self.context(root)
-            failed = subprocess.CalledProcessError(2, ["ssh"])
-            with (
-                mock.patch.object(dev, "run_local"),
-                mock.patch.object(
-                    dev, "ssh", side_effect=[None, failed, None]
-                ) as ssh,
-            ):
-                with self.assertRaises(subprocess.CalledProcessError):
-                    dev.command_sync_x11display(
-                        context, source, "/root/x11display"
-                    )
-
-        failed_deploy = ssh.call_args_list[1].args[1]
-        self.assertLess(
-            failed_deploy.index("MAKEFLAGS= MFLAGS= make all"),
-            failed_deploy.index("mv '/root/x11display.new' '/root/x11display'"),
-        )
-        cleanup = ssh.call_args_list[2]
-        self.assertEqual(
-            cleanup.args[1],
-            "rm -rf '/root/x11display.new'; rm -f '/root/x11display.incoming.tar'",
-        )
-        self.assertFalse(cleanup.kwargs["check"])
-
     def test_run_uses_isolated_python_hal_path_and_canonical_manifests(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             context = self.context(Path(temporary))
@@ -688,66 +600,22 @@ class DeliveryCommandTests(unittest.TestCase):
             "msys-notes",
             "msys-calculator",
             "msys-device-info",
-            "msys-apps",
         ):
             self.assertNotIn(f"/opt/msys-dev/{application}/manifest.json", command)
-
-    def test_compatibility_service_script_uses_private_runtime_and_overlays(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary) / "start-msys.sh"
-            with redirect_stdout(io.StringIO()):
-                result = dev.command_script(output, "/opt/msys-dev")
-            source = output.read_text(encoding="utf-8")
-            syntax = subprocess.run(
-                ["sh", "-n"], input=source, text=True, capture_output=True
-            )
-
-        self.assertEqual(result, 0)
-        self.assertEqual(syntax.returncode, 0, syntax.stderr)
-        self.assertIn(".runtime/python/bin/python3", source)
-        self.assertIn("--manifest", source)
-        self.assertIn("msys-hal", source)
-        self.assertIn("$MSYS_ROOT/msys-shell-native/manifest.json", source)
-        canonical = "$MSYS_ROOT/msys-x11-session/manifest.json"
-        ch347 = "$MSYS_ROOT/msys-openstick-ch347/manifest.json"
-        install = "$MSYS_ROOT/msys-install/manifest.json"
-        input_method = "$MSYS_ROOT/msys-input-touch/manifest.json"
-        self.assertIn(canonical, source)
-        self.assertIn(ch347, source)
-        self.assertIn(install, source)
-        self.assertIn(input_method, source)
-        self.assertIn('set -- "$@" --manifest "$input_manifest"', source)
-        self.assertLess(source.index(canonical), source.index(ch347))
-        self.assertLess(source.index(ch347), source.index(install))
-        self.assertIn('set -- "$@" --manifest "$install_manifest"', source)
-        self.assertIn('test -S "$MSYS_RUNTIME_DIR/control.sock"', source)
-        self.assertIn("refusing to start a duplicate msysd", source)
-        self.assertIn("MSYS_PLATFORM_PYTHONPATH", source)
-        self.assertIn("PYTHONDONTWRITEBYTECODE=1", source)
-        self.assertIn("MALLOC_ARENA_MAX", source)
-        self.assertIn("MALLOC_TRIM_THRESHOLD_=", source)
-        self.assertNotIn("exec python3", source)
-        for application in (
-            "msys-notes",
-            "msys-calculator",
-            "msys-device-info",
-            "msys-apps",
-        ):
-            self.assertNotIn(f"$MSYS_ROOT/{application}/manifest.json", source)
 
     def test_application_repository_is_delivered_as_a_package(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            apps = root / "msys-apps"
+            apps = root / "msys-notes"
             apps.mkdir()
             (apps / "manifest.json").write_text(
                 json.dumps(
-                    {"package": {"id": "org.msys.apps", "version": "0.1.0"}}
+                    {"package": {"id": "org.msys.notes", "version": "0.1.0"}}
                 ),
                 encoding="utf-8",
             )
             output = root / "dist"
-            artifact = output / "org.msys.apps-0.1.0.tar.gz"
+            artifact = output / "org.msys.notes-0.1.0.tar.gz"
             with (
                 mock.patch.object(dev, "CONFIG_PATH", root / "missing-config.json"),
                 mock.patch.object(
@@ -755,7 +623,7 @@ class DeliveryCommandTests(unittest.TestCase):
                     "build_package",
                     return_value={
                         "artifact": str(artifact),
-                        "package": "org.msys.apps",
+                        "package": "org.msys.notes",
                         "version": "0.1.0",
                         "sha256": "a" * 64,
                         "content_sha256": "c" * 64,
@@ -789,16 +657,16 @@ class DeliveryCommandTests(unittest.TestCase):
     def test_package_deliver_explicit_maf_format_reaches_build_and_install(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            apps = root / "msys-apps"
+            apps = root / "msys-notes"
             apps.mkdir()
             (apps / "manifest.json").write_text(
                 json.dumps(
-                    {"package": {"id": "org.msys.apps", "version": "0.1.0"}}
+                    {"package": {"id": "org.msys.notes", "version": "0.1.0"}}
                 ),
                 encoding="utf-8",
             )
             output = root / "dist"
-            artifact = output / "org.msys.apps-0.1.0.maf"
+            artifact = output / "org.msys.notes-0.1.0.maf"
             with (
                 mock.patch.object(dev, "CONFIG_PATH", root / "missing-config.json"),
                 mock.patch.object(
@@ -806,7 +674,7 @@ class DeliveryCommandTests(unittest.TestCase):
                     "build_package",
                     return_value={
                         "artifact": str(artifact),
-                        "package": "org.msys.apps",
+                        "package": "org.msys.notes",
                         "version": "0.1.0",
                         "format": "maf",
                         "sha256": "a" * 64,

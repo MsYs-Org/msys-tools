@@ -159,7 +159,7 @@ $document = [ordered]@{
     linux = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "fast" -Arguments @("--screenshot", "/tmp/post.png") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
     empty = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "fast" -Arguments @("--screenshot=") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
     explicitEmpty = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "fast" -Arguments @("--screenshot", "") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
-    noArguments = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "sync-x11display" -Arguments $null -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
+    noArguments = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "status" -Arguments $null -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
     unrelated = [string[]]@(ConvertTo-MsysScreenshotArguments -CommandName "call" -Arguments @("role:hal", "set", "--field", "path=artifacts\post.png") -WorkspaceWindows $workspace -WorkspaceWsl $workspaceWsl)
 }
 $document | ConvertTo-Json -Compress -Depth 4

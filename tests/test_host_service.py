@@ -105,7 +105,6 @@ class HostServiceTests(unittest.TestCase):
             "msys-notes",
             "msys-calculator",
             "msys-device-info",
-            "msys-apps",
         ):
             self.assertNotIn(f"$MSYS_ROOT/{application}/manifest.json", launcher)
         self.assertNotIn("exec python3", launcher)

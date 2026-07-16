@@ -155,8 +155,7 @@ native Core rebuild; enter a repository or pass `--repo` to synchronize code.
 `--overlay SOURCE=RELATIVE_DEST`. Canonical `msys-settings`, `msys-notes`,
 `msys-calculator`, `msys-device-info`, and `msys-input-touch` deliveries each
 require the sibling SDK at runtime, so when no explicit overlay is given,
-`fast` applies it to each package independently. Explicit delivery of the
-pre-split `msys-apps` repository retains the same compatibility overlay:
+`fast` applies it to each package independently:
 
 ```text
 msys-sdk/msys_sdk=files/app/msys_sdk
@@ -350,8 +349,8 @@ persisted choice, not a hard-coded shell dependency: `mobile-spi`,
 
 Every target needs an SSH server, `sh`, `tar`, ordinary `cp`/`mv`/`uname`, and
 the isolated MSYS Python. Source synchronization is intentionally stricter:
-`make`, `cc`, and `c++` are build-required because Core, Shell, HAL, the native
-X11 policy, and board capture binaries are compiled in remote staging. Missing build tools make
+`make`, `cc`, and `c++` are build-required because Core, Shell, HAL, and the native
+X11 policy are compiled in remote staging. Missing build tools make
 `doctor` fail instead of allowing a later `sync` to fail halfway through. MSYS
 only reports the missing capability; it never invokes a target package
 manager. `rsync` and a distribution `python`/`python3` remain optional.
@@ -364,13 +363,14 @@ headless/custom profiles are classified independently from the persisted or
 explicit `--profile` value.
 
 Deployment artifacts are reported by stage. The native policy and CH347
-provider wrapper come from `sync --repo msys-x11-session`; the CH347 start/stop
-scripts, shared library, and five native capture binaries come from
-`sync-x11display`. Missing artifacts are shown as `deploy-required` with the
-specific `workspace-sync` or `x11display-sync` recovery step.
+provider wrapper come from `sync --repo msys-x11-session`. The self-contained
+CH347 runtime is delivered through the normal `org.msys.openstick.ch347`
+package flow, so `doctor` does not inspect the obsolete `/root/x11display`
+development fallback.
 
-`doctor` performs all target checks in one read-only SSH invocation, validates
-local manifests, and reports how to bootstrap the isolated runtime. On a new
+`doctor` performs all target checks in one read-only SSH invocation and reports
+how to bootstrap the isolated runtime. Manifest validation stays in the build
+and package commands that consume manifests. On a new
 device, bootstrap the runtime, provision build/runtime capabilities in the
 device image, run both synchronization stages, and then expect `doctor` to
 pass:
@@ -420,23 +420,6 @@ copies source trees. Ordinary application manifests such as
 `msysd --manifest` startup list: doing so would bypass the installer registry
 and make manual applications look like system services. Install or update them
 with the package delivery flow below.
-
-The board-owned `x11display` tree has a separate target-native delivery path:
-
-```powershell
-wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev sync-x11display --local x11display --destination /root/x11display
-```
-
-This command uploads into `/root/x11display.new`, runs separate `make clean`
-and `make all` steps there, and verifies all five runtime binaries as regular,
-executable, non-symlink files: `ch347_dirty_usb_sink`, `ch347_st7796_test`,
-`ch347_irq_test`, `ch347_app_gate`, and `xdamage_shm_capture`. Only that verified
-tree can replace `/root/x11display`; the previous tree is retained as
-`/root/x11display.previous`. Upload, extraction, build, or validation failure
-leaves the active tree untouched and removes both the incoming archive and
-`.new` tree. The target therefore needs its already-provisioned compiler and
-X11/Xext/Xdamage development files, but the command never invokes a package
-manager.
 
 `run` keeps the core profile/config directory but passes each repository-owned
 canonical manifest through repeatable `msysd --manifest` arguments when the
@@ -687,26 +670,6 @@ Exit status `0` is a working CJK outline backend, `3` is a completed but
 unhealthy probe such as `Noto Sans CJK SC -> fixed 10`, and `2` means the probe
 could not run. A package merely appearing in `font.families()` is not accepted.
 
-`visual-smoke` checks the semantic navigation route without hard-coded touch
-coordinates. It calls only typed Core and `role:window-manager` methods for
-Home, application start, Back, and Recents. To make restoration unambiguous it
-fails before mutation unless the chosen manual app is stopped and the device
-is already at a clean Home session with no managed or external user windows.
-After either success or a mid-test failure it stops only the app that it
-started, when necessary, and raises Home again:
-
-```powershell
-wsl env PYTHONPATH=/mnt/g/Code/MsYs/msys-tools python3 -m msys_tools.dev visual-smoke
-```
-
-The default component is the split `org.msys.calculator:calculator`. On a board
-that has none of the split components yet, the probe can select the legacy
-calculator component and reports that compatibility selection in its JSON.
-
-The structured `msys.visual-smoke.v1` result includes bounded typed step
-outcomes and the cleanup record. A nonzero status means either the route or
-its restoration failed; inspect that JSON before continuing interactive tests.
-
 For the complete P0 phone UI route, `ui-accept` (alias `p0-ui`) runs one remote
 helper through one SSH connection. It records the initially running manual
 application set, then exercises Notes, Calculator, and Device Info in order:
@@ -718,9 +681,9 @@ application set, then exercises Notes, Calculator, and Device Info in order:
 ```
 
 The canonical route uses `org.msys.notes:notes`,
-`org.msys.calculator:calculator`, and `org.msys.device-info:device-info`. A
-fully pre-split board is detected as a compatibility mode and reported through
-`component_contract`; partial/mixed installations fail with the missing ID.
+`org.msys.calculator:calculator`, and `org.msys.device-info:device-info` as
+three independent peer packages. Missing packages fail with the exact missing
+ID in `component_contract`.
 
 The `msys.p0-ui-acceptance.v1` JSON verifies the effective workarea, exact
 component/window identities, real bounded P6 window thumbnails, three-card
