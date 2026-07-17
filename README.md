@@ -14,6 +14,11 @@ component identity; no profile edit is required.
 
 Development tools for building MSYS from Windows and deploying to Linux devices.
 
+Version 0.1.39 makes the no-WSL Windows audio fastpath rebuild and inventory
+both target-native binaries (`msys-hci-bootstrap` and the optional native audio
+manager) in the same target transaction, so a source edit cannot retain the
+previous manager ELF in a new package.
+
 This repository is for the developer workstation. It is not required by the
 runtime image and does not add systemd or D-Bus dependencies.
 

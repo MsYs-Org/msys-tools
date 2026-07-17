@@ -350,11 +350,12 @@ function Get-TargetBuildCommand {
         "msys-x11-session" { return "cd $stageQ; MAKEFLAGS= MFLAGS= make clean; MAKEFLAGS= MFLAGS= make SDK_ROOT=$sdkQ CFLAGS='-Os -g0 -DNDEBUG -Wall -Wextra -Werror -std=c11' all" }
         "msys-audio" {
             $runtimeRoot = Quote-Sh ($Stage + "/files/runtime/aarch64")
-            $inventoryCode = 'import hashlib,json,pathlib,sys;p=pathlib.Path(sys.argv[1]);rel="files/runtime/aarch64/bin/msys-hci-bootstrap";f=p/rel;inv=p/"files/runtime/aarch64/runtime.json";d=json.loads(inv.read_text());e={"path":rel,"size":f.stat().st_size,"sha256":hashlib.sha256(f.read_bytes()).hexdigest()};d["files"]=sorted([x for x in d["files"] if x.get("path")!=rel]+[e],key=lambda x:x["path"]);inv.write_text(json.dumps(d,indent=2)+"\n")'
+            $inventoryCode = 'import hashlib,json,pathlib,sys;p=pathlib.Path(sys.argv[1]);rels=["files/runtime/aarch64/bin/msys-hci-bootstrap","files/runtime/aarch64/bin/msys-audio-manager-native"];inv=p/"files/runtime/aarch64/runtime.json";d=json.loads(inv.read_text());files=[x for x in d["files"] if x.get("path") not in rels];files.extend({"path":rel,"size":(p/rel).stat().st_size,"sha256":hashlib.sha256((p/rel).read_bytes()).hexdigest()} for rel in rels);d["files"]=sorted(files,key=lambda x:x["path"]);inv.write_text(json.dumps(d,indent=2)+"\n")'
             return (
-                "cd $stageQ; MAKEFLAGS= MFLAGS= make -j1 -C native clean; " +
-                "MAKEFLAGS= MFLAGS= make -j1 -C native all; " +
-                "MAKEFLAGS= MFLAGS= make -j1 -C native DESTDIR=$runtimeRoot install; " +
+                "cd $stageQ; chmod 0755 files/runtime/aarch64/bin/*; " +
+                "MAKEFLAGS= MFLAGS= make -j1 -C native MSYS_SDK_DIR=$sdkQ clean; " +
+                "MAKEFLAGS= MFLAGS= make -j1 -C native MSYS_SDK_DIR=$sdkQ all manager; " +
+                "MAKEFLAGS= MFLAGS= make -j1 -C native MSYS_SDK_DIR=$sdkQ DESTDIR=$runtimeRoot install install-manager; " +
                 (Get-RemotePythonInvocation) + " -c " + (Quote-Sh $inventoryCode) + " $stageQ"
             )
         }

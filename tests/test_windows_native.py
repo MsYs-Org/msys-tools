@@ -68,6 +68,17 @@ class WindowsNativePathTests(unittest.TestCase):
         self.assertIn("UI_ROOT=$uiQ SDK_ROOT=$sdkQ", notes)
         self.assertIn('$targets += "probe"', notes)
 
+    def test_audio_sync_rebuilds_both_target_native_binaries(self) -> None:
+        source = (ROOT / "msys-native.ps1").read_text(encoding="utf-8-sig")
+        start = source.index('        "msys-audio" {')
+        end = source.index('        default { return ":" }', start)
+        audio = source[start:end]
+        self.assertIn("MSYS_SDK_DIR=$sdkQ all manager", audio)
+        self.assertIn("install install-manager", audio)
+        self.assertIn("msys-hci-bootstrap", audio)
+        self.assertIn("msys-audio-manager-native", audio)
+        self.assertIn("chmod 0755 files/runtime/aarch64/bin/*", audio)
+
     def test_remote_python_disables_bytecode(self) -> None:
         source = (ROOT / "msys-native.ps1").read_text(encoding="utf-8-sig")
         self.assertIn("PYTHONDONTWRITEBYTECODE=1", source)
