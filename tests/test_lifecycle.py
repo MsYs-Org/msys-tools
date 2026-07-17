@@ -526,7 +526,6 @@ class TypedAgentRequestTests(unittest.TestCase):
             }
             with (
                 mock.patch.object(dev, "validate_package", return_value=details),
-                mock.patch.object(dev, "ssh") as ssh,
                 mock.patch.object(dev, "run_local") as upload,
                 mock.patch.object(dev, "_typed_agent_request", return_value=0) as request,
                 redirect_stdout(io.StringIO()),
@@ -538,8 +537,12 @@ class TypedAgentRequestTests(unittest.TestCase):
                     state_dir="/srv/msys-state",
                 )
         self.assertEqual(status, 0)
-        self.assertEqual(ssh.call_count, 2)
         self.assertEqual(upload.call_count, 1)
+        upload_target = upload.call_args.args[0][-1]
+        self.assertRegex(
+            upload_target,
+            r"^root@example:/opt/msys-dev/\.incoming-package-[0-9a-f]{32}\.tar\.gz$",
+        )
         kwargs = request.call_args.kwargs
         self.assertEqual(kwargs["target"], "role:install-agent")
         self.assertEqual(kwargs["method"], "install_archive")
@@ -549,8 +552,59 @@ class TypedAgentRequestTests(unittest.TestCase):
         self.assertEqual(len(kwargs["payload"]["sha256"]), 64)
         self.assertIn(
             "chmod 0700 '/srv/msys-state/updates/staged-rpc'",
-            ssh.call_args_list[1].args[1],
+            kwargs["remote_prepare"],
         )
+        self.assertIn(
+            "mv '/opt/msys-dev/.incoming-package-", kwargs["remote_prepare"]
+        )
+        self.assertEqual(
+            kwargs["retry_no_provider_component"],
+            "org.msys.core.install:install-agent",
+        )
+
+    def test_cold_install_provider_retry_stays_in_one_ssh_session(self) -> None:
+        response = {
+            "type": "return",
+            "id": 1,
+            "payload": {
+                "schema": dev.INSTALL_AGENT_RESULT_SCHEMA,
+                "operation": "install_archive",
+                "ok": True,
+            },
+        }
+        completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(response))
+        with tempfile.TemporaryDirectory() as temporary:
+            context = self.context(Path(temporary))
+            with (
+                mock.patch.object(dev, "ssh_capture", return_value=completed) as capture,
+                redirect_stdout(io.StringIO()),
+            ):
+                status, result = dev._typed_agent_result(
+                    context,
+                    "/tmp/msys-main",
+                    target="role:install-agent",
+                    method="install_archive",
+                    payload={"path": "/srv/staged/package.maf"},
+                    operation="install_archive",
+                    remote_prepare="set -eu; touch '/srv/staged/package.maf'",
+                    retry_no_provider_component=dev.INSTALL_AGENT_COMPONENT,
+                )
+
+        self.assertEqual(status, 0)
+        self.assertIsNotNone(result)
+        capture.assert_called_once()
+        command = capture.call_args.args[1]
+        self.assertTrue(
+            command.startswith("set -eu; touch '/srv/staged/package.maf'; ")
+        )
+        self.assertIn('"code": "NO_PROVIDER"', command)
+        self.assertIn("--target 'msys.core' --method 'start'", command)
+        self.assertIn("org.msys.core.install:install-agent", command)
+        self.assertEqual(command.count("-m msys_tools.remote_ctl"), 3)
+        syntax = subprocess.run(
+            ["sh", "-n"], input=command, text=True, capture_output=True
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
     def test_delivery_reuses_build_identity_and_archive_hash_without_revalidating(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -131,6 +131,7 @@ DEFAULT_STOP_TIMEOUT = 20.0
 DEFAULT_RPC_TIMEOUT = 120.0
 DEFAULT_RELEASE_HEALTH_TIMEOUT = 90.0
 INSTALL_AGENT_RESULT_SCHEMA = "msys.install-agent-result.v1"
+INSTALL_AGENT_COMPONENT = "org.msys.core.install:install-agent"
 SHIELD_CONTROL_SCHEMA = "msys.shield-control.v1"
 SHIELD_STATUS_SCHEMA = "msys.screen-shield.status.v1"
 DOCTOR_PROBE_PREFIX = "__MSYS_DOCTOR_V2__"
@@ -1983,6 +1984,8 @@ def remote_control_command(
     timeout: float | None = None,
     idempotent: bool = False,
     wait_display_migration: bool = False,
+    remote_prepare: str | None = None,
+    retry_no_provider_component: str | None = None,
 ) -> subprocess.CompletedProcess[str] | int:
     payload_json = json.dumps(payload, separators=(",", ":"))
     py_path = f"{ctx.remote}/msys-tools"
@@ -2003,6 +2006,33 @@ def remote_control_command(
         command += " --wait-display-migration"
     if response_only:
         command += " --response-only"
+    if retry_no_provider_component is not None:
+        start_payload = json.dumps(
+            {"component": retry_no_provider_component}, separators=(",", ":")
+        )
+        start_command = (
+            "PYTHONDONTWRITEBYTECODE=1 "
+            f"PYTHONPATH={quote_sh(py_path)} "
+            f"{quote_sh(ctx.remote_python)} -B -m msys_tools.remote_ctl "
+            f"--runtime-dir {quote_sh(runtime_dir)} "
+            "--target 'msys.core' --method 'start' "
+            f"--payload {quote_sh(start_payload)} --idempotent --response-only"
+        )
+        # Keep the cold-provider recovery inside this SSH session.  Normal
+        # delivery performs one RPC.  Only Core's exact NO_PROVIDER reply
+        # starts the declared provider and retries the original RPC once.
+        command = (
+            f"if reply=$({command}); then "
+            "printf '%s\\n' \"$reply\"; exit 0; "
+            "else status=$?; fi; "
+            "case \"$reply\" in "
+            "*'\"code\": \"NO_PROVIDER\"'*) "
+            f"if {start_command} >/dev/null 2>&1; then {command}; exit $?; fi ;; "
+            "esac; "
+            "printf '%s\\n' \"$reply\"; exit \"$status\""
+        )
+    if remote_prepare is not None:
+        command = f"{remote_prepare}; {command}"
     if capture:
         return ssh_capture(ctx, command)
     completed = ssh(ctx, command, check=False)
@@ -2418,6 +2448,8 @@ def _typed_agent_result(
     operation: str,
     timeout: float = DEFAULT_RPC_TIMEOUT,
     emit_success: bool = True,
+    remote_prepare: str | None = None,
+    retry_no_provider_component: str | None = None,
 ) -> tuple[int, dict[str, Any] | None]:
     completed = remote_control_command(
         ctx,
@@ -2428,6 +2460,8 @@ def _typed_agent_result(
         capture=True,
         target=target,
         timeout=timeout,
+        remote_prepare=remote_prepare,
+        retry_no_provider_component=retry_no_provider_component,
     )
     if isinstance(completed, int):
         return completed, None
@@ -2490,6 +2524,8 @@ def _typed_agent_request(
     payload: dict[str, Any],
     operation: str,
     timeout: float = DEFAULT_RPC_TIMEOUT,
+    remote_prepare: str | None = None,
+    retry_no_provider_component: str | None = None,
 ) -> int:
     status, _result = _typed_agent_result(
         ctx,
@@ -2499,6 +2535,8 @@ def _typed_agent_request(
         payload=payload,
         operation=operation,
         timeout=timeout,
+        remote_prepare=remote_prepare,
+        retry_no_provider_component=retry_no_provider_component,
     )
     return status
 
@@ -2577,22 +2615,21 @@ def command_install_archive(
     if not state_path.is_absolute() or state_path == PurePosixPath("/") or ".." in state_path.parts:
         print("install-archive: state directory must be a non-root absolute path", file=sys.stderr)
         return 2
-    incoming_dir = f"{ctx.remote}/.incoming/packages"
     artifact_suffix = _delivery_artifact_suffix(archive)
-    incoming = f"{incoming_dir}/{archive_sha256}{artifact_suffix}"
+    incoming = (
+        f"{ctx.remote}/.incoming-package-{secrets.token_hex(16)}{artifact_suffix}"
+    )
     staged_dir = f"{state_path.as_posix()}/updates/staged-rpc"
     staged = f"{staged_dir}/{archive_sha256}{artifact_suffix}"
-    ssh(ctx, f"mkdir -p {quote_sh(incoming_dir)} && rm -f {quote_sh(incoming)}")
     run_local([*scp_base_args(ctx), str(archive), f"{ctx.target}:{incoming}"])
-    ssh(
-        ctx,
+    prepare = (
         "set -eu; "
         f"mkdir -p -m 0700 {quote_sh(staged_dir)}; "
         f"test -d {quote_sh(staged_dir)}; test ! -L {quote_sh(staged_dir)}; "
         f"chmod 0700 {quote_sh(staged_dir)}; "
         f"rm -f {quote_sh(staged)}; mv {quote_sh(incoming)} {quote_sh(staged)}; "
         f"chmod 0600 {quote_sh(staged)}; test -f {quote_sh(staged)}; "
-        f"test ! -L {quote_sh(staged)}",
+        f"test ! -L {quote_sh(staged)}"
     )
     return _typed_agent_request(
         ctx,
@@ -2609,6 +2646,8 @@ def command_install_archive(
             "require_sha256": True,
             "require_content_hashes": True,
         },
+        remote_prepare=prepare,
+        retry_no_provider_component=INSTALL_AGENT_COMPONENT,
     )
 
 

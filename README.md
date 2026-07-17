@@ -1011,6 +1011,12 @@ status therefore means the typed terminal reply had
 `schema=msys.install-agent-result.v1` and `ok=true`; merely publishing an event
 is not treated as success.
 
+The fast path uses one package upload and one SSH install session. The same
+session moves the archive into private staging and performs the typed RPC. If
+an idle on-demand Install Agent causes Core to return `NO_PROVIDER`, it starts
+`org.msys.core.install:install-agent` and retries that request once, so no
+manual `start-component` command is needed.
+
 HAL, Native Shell, and X11 policy delivery adds a target-native gate.
 `fast --deliver` runs the required sync automatically. The atomic target build
 executes one ELF self-check, version probe, or loader probe and writes a marker
