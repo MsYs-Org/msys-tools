@@ -166,14 +166,28 @@ def run_settings_smoke(
         if not 0 < timeout <= 120:
             raise SettingsSmokeError("timeout must be greater than zero and at most 120 seconds")
         layout = validate_layout(rpc("role:window-manager", "get_layout", {}, "layout"))
-        expected = {"x": 0, "y": 42, "width": 320, "height": 396}
         screen = layout.get("screen")
         if not isinstance(screen, dict) or (
             screen.get("width"), screen.get("height")
         ) != (320, 480):
             raise SettingsSmokeError(f"expected a 320x480 display, got {layout.get('screen')!r}")
-        if layout.get("workarea") != expected:
-            raise SettingsSmokeError(f"expected workarea {expected!r}, got {layout.get('workarea')!r}")
+        insets = layout.get("insets")
+        if not isinstance(insets, dict) or any(
+            not isinstance(insets.get(edge), int) or insets[edge] < 0
+            for edge in ("top", "right", "bottom", "left")
+        ):
+            raise SettingsSmokeError(f"layout returned invalid insets: {insets!r}")
+        expected = {
+            "x": insets["left"],
+            "y": insets["top"],
+            "width": 320 - insets["left"] - insets["right"],
+            "height": 480 - insets["top"] - insets["bottom"],
+        }
+        if expected["width"] < 1 or expected["height"] < 1 or layout.get("workarea") != expected:
+            raise SettingsSmokeError(
+                f"workarea does not match the effective system bars: "
+                f"expected {expected!r}, got {layout.get('workarea')!r}"
+            )
         document["layout"] = layout
 
         # The smoke is an explicit cold-start acceptance.  Reset a previously

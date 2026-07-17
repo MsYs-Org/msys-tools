@@ -40,7 +40,7 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
         self.assertIn('"navigation_back"', source)
         self.assertNotIn('"--debug-click-identity"', source)
 
-    def test_one_route_checks_detail_back_idle_and_exact_workarea(self) -> None:
+    def test_one_route_checks_detail_back_idle_and_effective_workarea(self) -> None:
         clock = FakeClock()
         stage = 0
 
@@ -52,8 +52,8 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
                     "profile": "mobile",
                     "orientation": "portrait",
                     "screen": {"width": 320, "height": 480},
-                    "insets": {"top": 42, "right": 0, "bottom": 42, "left": 0},
-                    "workarea": {"x": 0, "y": 42, "width": 320, "height": 396},
+                    "insets": {"top": 42, "right": 0, "bottom": 24, "left": 0},
+                    "workarea": {"x": 0, "y": 42, "width": 320, "height": 414},
                     "display_consistent": True,
                 }
             elif target == "msys.core" and method == "stop":
@@ -78,14 +78,14 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
                             "role": "application",
                             "state": "visible",
                             "native_id": "0x123",
-                            "geometry": {"x": 0, "y": 42, "width": 320, "height": 396},
+                            "geometry": {"x": 0, "y": 42, "width": 320, "height": 414},
                         }
                     ]
                 }
             return {"response": {"type": "return", "payload": result}}
 
         def present(_xid: str) -> tuple[int, ...]:
-            return (0, 0, 320, 396, 1, 126720, 0, stage + 1)
+            return (0, 0, 320, 414, 1, 132480, 0, stage + 1)
 
         with (
             mock.patch.object(smoke.time, "monotonic", side_effect=clock.monotonic),
@@ -104,7 +104,7 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
         self.assertTrue(document["ok"])
         self.assertTrue(document["frames"]["idle_unchanged"])
         self.assertEqual(document["frames"]["open_present_delta"], 1)
-        self.assertEqual(document["window"]["geometry"]["height"], 396)
+        self.assertEqual(document["window"]["geometry"]["height"], 414)
         self.assertEqual(
             [row["step"] for row in document["operations"][:4]],
             ["layout", "stop", "start", "window"],
