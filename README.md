@@ -260,7 +260,12 @@ Auto mode never starts a broker; it only reuses one created explicitly by
 `accept`, `ui-accept`, and
 `debug` shortcuts select On automatically unless an explicit broker mode is
 supplied. `-Broker On` starts/requires it, and `-Broker Off` always uses
-one-shot WSL. The broker listener is strictly `127.0.0.1`, its per-session
+one-shot WSL. An automatically selected broker falls back to one-shot mode if
+broker startup fails; an explicit `-Broker On` remains strict. Both broker
+cold start and the one-shot WSL startup probe have a 15-second bound, so a
+wedged WSL service reports an actionable error instead of hanging indefinitely.
+The error points to the equivalent `--native` inspection/development path.
+The broker listener is strictly `127.0.0.1`, its per-session
 token stays in the current user's
 `%LOCALAPPDATA%\MSYS\dev-brokers` state file, and it receives an argument array
 rather than a shell command; the token is not placed in the WSL process

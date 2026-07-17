@@ -1,6 +1,6 @@
 [project]
 name = "msys-tools"
-version = "0.1.36"
+version = "0.1.37"
 description = "Windows-to-Linux development tools for MSYS"
 requires-python = ">=3.10"
 dependencies = []

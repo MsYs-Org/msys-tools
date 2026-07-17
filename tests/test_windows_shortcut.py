@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -127,6 +128,84 @@ class WindowsShortcutFilesTests(unittest.TestCase):
         self.assertIn('"broker"', source)
         self.assertIn("msys-dev-shell.rc", source)
         self.assertIn("ConvertTo-MsysArgument", source)
+
+    def test_wsl_startup_probe_is_bounded_without_touching_existing_processes(self) -> None:
+        powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+        if powershell is None or os.name != "nt":
+            self.skipTest("Windows PowerShell is unavailable")
+
+        source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(
+            encoding="utf-8"
+        )
+        function_body = source.split(
+            "function ConvertTo-MsysWindowsCommandLineArgument", maxsplit=1
+        )[1].split("function Open-MsysBrokerClient", maxsplit=1)[0]
+        functions = "\n".join(
+            (
+                '$script:MsysWslStartupTimeoutMilliseconds = 15000',
+                '$ErrorActionPreference = "Stop"',
+                "function ConvertTo-MsysWindowsCommandLineArgument" + function_body,
+            )
+        )
+        probe = r'''
+$ok = [PSCustomObject]@{ Source = $env:MSYS_TEST_WSL_OK }
+$slow = [PSCustomObject]@{ Source = $env:MSYS_TEST_WSL_SLOW }
+Assert-MsysWslStartup -WslCommand $ok -TimeoutMilliseconds 1000
+$watch = [Diagnostics.Stopwatch]::StartNew()
+$message = ""
+try {
+    Assert-MsysWslStartup -WslCommand $slow -TimeoutMilliseconds 150
+} catch {
+    $message = $_.Exception.Message
+}
+$watch.Stop()
+[ordered]@{ elapsed_ms = $watch.ElapsedMilliseconds; message = $message } | ConvertTo-Json -Compress
+'''
+        encoded = base64.b64encode((functions + probe).encode("utf-16le")).decode(
+            "ascii"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            ok = directory / "wsl-ok.cmd"
+            slow = directory / "wsl-slow.cmd"
+            ok.write_text("@echo off\r\nexit /b 0\r\n", encoding="ascii")
+            slow.write_text(
+                "@echo off\r\nping.exe -n 10 127.0.0.1 >nul\r\n",
+                encoding="ascii",
+            )
+            environment = os.environ.copy()
+            environment["MSYS_TEST_WSL_OK"] = str(ok)
+            environment["MSYS_TEST_WSL_SLOW"] = str(slow)
+            completed = subprocess.run(
+                [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                cwd=WORKSPACE,
+                env=environment,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        document = json.loads(completed.stdout)
+        self.assertLess(document["elapsed_ms"], 3000)
+        self.assertIn("Only this probe process tree was stopped", document["message"])
+
+    def test_broker_cold_start_and_implicit_fallback_are_bounded(self) -> None:
+        source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("$script:MsysBrokerStartupTimeoutMilliseconds = 15000", source)
+        self.assertIn("$startup = [Diagnostics.Stopwatch]::StartNew()", source)
+        self.assertNotIn("for ($wait = 0; $wait -lt 20; $wait++)", source)
+        self.assertIn("Stop-MsysOwnedProcessTree $process", source)
+        self.assertIn('if ($brokerMode -eq "on" -and $brokerExplicit)', source)
+        self.assertIn("trying bounded one-shot WSL mode", source)
+        one_shot = source.split("$wslArgs = @()", maxsplit=1)[1]
+        self.assertIn("Assert-MsysWslStartup", one_shot)
+        self.assertIn("--native components", one_shot)
 
     def test_tools_wrapper_maps_only_screenshot_outputs_as_windows_paths(self) -> None:
         source = (WORKSPACE / "msys-tools" / "msys.ps1").read_text(encoding="utf-8")

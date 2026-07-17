@@ -146,6 +146,11 @@ starts an isolated `msys_tools.dev` child with a validated JSON argument array,
 so command behavior is unchanged while the Windows-to-WSL startup cost
 disappears after explicit startup. It exits after four idle hours and remains
 off until explicitly started again (or a command is run with `-Broker On`).
+An implicitly selected broker may fall back to one-shot mode, while explicit
+`-Broker On` remains strict. Broker cold start and the one-shot WSL startup
+probe are both bounded to 15 seconds. A stuck WSL service therefore fails with
+a `--native` fallback hint; only the process tree created for that failed probe
+is terminated.
 
 `key` and `connect` intentionally remain one-shot interactive WSL commands so
 an SSH password prompt can reach the terminal. If localhost forwarding is

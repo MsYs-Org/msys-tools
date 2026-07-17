@@ -33,6 +33,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$script:MsysWslStartupTimeoutMilliseconds = 15000
+$script:MsysBrokerStartupTimeoutMilliseconds = 15000
 
 function Write-MsysUsage {
     @"
@@ -376,6 +378,61 @@ function ConvertTo-MsysWindowsCommandLineArgument {
     return '"' + $escaped + '"'
 }
 
+function Stop-MsysOwnedProcessTree {
+    param([Parameter(Mandatory = $true)]$Process)
+
+    try {
+        if ($Process.HasExited) {
+            return
+        }
+    } catch {
+        return
+    }
+
+    # wsl.exe is a forwarding process on current Windows builds.  Killing only
+    # that outer PID can leave the child forwarder behind, so terminate the
+    # tree rooted at the process this invocation created.  Never enumerate or
+    # terminate unrelated WSL processes.
+    $taskkill = Get-Command "taskkill.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $taskkill) {
+        & $taskkill.Source /PID "$($Process.Id)" /T /F 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+    }
+    Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+}
+
+function Assert-MsysWslStartup {
+    param(
+        [Parameter(Mandatory = $true)]$WslCommand,
+        [string]$DistroName,
+        [int]$TimeoutMilliseconds = $script:MsysWslStartupTimeoutMilliseconds
+    )
+
+    # A one-shot command can otherwise wait forever before Python starts when
+    # the Windows WSL service is wedged.  Probe the same selected distribution
+    # first; once this succeeds, the real command may legitimately be long.
+    $arguments = @()
+    if (-not [string]::IsNullOrWhiteSpace($DistroName)) {
+        $arguments += @("-d", $DistroName)
+    }
+    $arguments += @("--exec", "true")
+    $commandLine = (($arguments | ForEach-Object { ConvertTo-MsysWindowsCommandLineArgument $_ }) -join " ")
+    $process = Start-Process -FilePath $WslCommand.Source -ArgumentList $commandLine -WindowStyle Hidden -PassThru
+    try {
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            Stop-MsysOwnedProcessTree $process
+            throw "WSL did not finish a startup probe within $([Math]::Ceiling($TimeoutMilliseconds / 1000.0)) seconds. Only this probe process tree was stopped."
+        }
+        if ($process.ExitCode -ne 0) {
+            throw "WSL startup probe exited with status $($process.ExitCode). Check the selected WSL distribution."
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Open-MsysBrokerClient {
     param(
         [Parameter(Mandatory = $true)][int]$Port,
@@ -523,7 +580,12 @@ function Start-MsysBroker {
     $stdoutPath = Join-Path $directory ($baseName + ".stdout.log")
     $stderrPath = Join-Path $directory ($baseName + ".stderr.log")
     $lastError = $null
+    $startup = [Diagnostics.Stopwatch]::StartNew()
     for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $remaining = $script:MsysBrokerStartupTimeoutMilliseconds - [int]$startup.ElapsedMilliseconds
+        if ($remaining -le 0) {
+            break
+        }
         $port = Get-MsysBrokerPort
         $token = New-MsysBrokerToken
         # Persist the state before launching WSL so the broker can read its
@@ -570,21 +632,34 @@ function Start-MsysBroker {
         }
         $state["pid"] = $process.Id
         Save-MsysBrokerState -Path $StatePath -State $state
-        for ($wait = 0; $wait -lt 20; $wait++) {
-            Start-Sleep -Milliseconds 75
+        while ($startup.ElapsedMilliseconds -lt $script:MsysBrokerStartupTimeoutMilliseconds) {
             $candidate = Read-MsysBrokerState $StatePath
             if ($null -ne $candidate -and (Test-MsysBroker -State $candidate -TimeoutMilliseconds 100)) {
+                $process.Dispose()
                 return $candidate
             }
             if ($process.HasExited) {
                 break
             }
+            $remaining = $script:MsysBrokerStartupTimeoutMilliseconds - [int]$startup.ElapsedMilliseconds
+            if ($remaining -gt 0) {
+                Start-Sleep -Milliseconds ([Math]::Min(75, $remaining))
+            }
         }
-        $lastError = "broker did not become ready (see $stderrPath)"
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        if ($process.HasExited) {
+            $lastError = "broker process exited with status $($process.ExitCode) (see $stderrPath)"
+        } else {
+            $seconds = [Math]::Ceiling($script:MsysBrokerStartupTimeoutMilliseconds / 1000.0)
+            $lastError = "WSL did not launch the broker within $seconds seconds (see $stderrPath)"
+            Stop-MsysOwnedProcessTree $process
         }
+        $process.Dispose()
         Remove-MsysBrokerState $StatePath
+    }
+    $startup.Stop()
+    if ($null -eq $lastError) {
+        $seconds = [Math]::Ceiling($script:MsysBrokerStartupTimeoutMilliseconds / 1000.0)
+        $lastError = "WSL did not launch the broker within $seconds seconds (see $stderrPath)"
     }
     throw "Could not start the local MSYS broker: $lastError"
 }
@@ -797,7 +872,8 @@ if ($null -ne $brokerControl) {
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($Broker)) {
+$brokerExplicit = -not [string]::IsNullOrWhiteSpace($Broker)
+if (-not $brokerExplicit) {
     $brokerMode = if ($fastBrokerDefault) { "on" } else { "auto" }
 } else {
     $brokerMode = $Broker.ToLowerInvariant()
@@ -837,10 +913,10 @@ if (-not $requiresInteractiveWsl -and $brokerMode -ne "off") {
             throw $brokerResult.Error
         }
     } catch {
-        if ($brokerMode -eq "on") {
+        if ($brokerMode -eq "on" -and $brokerExplicit) {
             throw "MSYS local broker is required but unavailable: $($_.Exception.Message)"
         }
-        [Console]::Error.WriteLine("MSYS local broker unavailable; using one-shot WSL compatibility mode: $($_.Exception.Message)")
+        [Console]::Error.WriteLine("MSYS local broker unavailable; trying bounded one-shot WSL mode: $($_.Exception.Message)")
     }
 }
 
@@ -869,6 +945,19 @@ if ($interactiveShell) {
         "python3", "-m", "msys_tools.dev"
     )
     $wslArgs += $cliArgs
+}
+
+try {
+    Assert-MsysWslStartup -WslCommand $wsl -DistroName $selectedDistro
+} catch {
+    $nativeHint = if ($actionName -in @("quick", "deploy", "fast", "q")) {
+        "Use '.\msys.cmd --native fast --repo <repo>' while WSL is unavailable."
+    } elseif ($actionName -in @("debug", "inspect")) {
+        "Use '.\msys.cmd --native components' and '.\msys.cmd --native tail' while WSL is unavailable."
+    } else {
+        "Use '.\msys.cmd --native help' to see the no-WSL commands."
+    }
+    throw "$($_.Exception.Message) $nativeHint"
 }
 
 & $wsl.Source @wslArgs
