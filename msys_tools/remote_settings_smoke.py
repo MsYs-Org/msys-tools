@@ -124,7 +124,16 @@ def _default_tap(policy_binary: str, display: str) -> TapCallable:
 
     def tap(x: int, y: int) -> None:
         result = subprocess.run(
-            [str(binary), "--debug-click-identity", IDENTITY, str(x), str(y)],
+            [
+                str(binary),
+                "--debug-swipe-identity",
+                IDENTITY,
+                str(x),
+                str(y),
+                str(x),
+                str(y),
+                "32",
+            ],
             check=False,
             text=True,
             stdout=subprocess.PIPE,
@@ -134,7 +143,7 @@ def _default_tap(policy_binary: str, display: str) -> TapCallable:
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[-300:]
-            raise SettingsSmokeError(f"Settings touch injection failed: {detail}")
+            raise SettingsSmokeError(f"Settings XTEST tap failed: {detail}")
 
     return tap
 

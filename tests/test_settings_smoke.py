@@ -34,6 +34,11 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
         self.assertEqual(value[-1], 17)
         self.assertEqual(value[2:4], (320, 396))
 
+    def test_real_tap_uses_server_input_instead_of_ignored_synthetic_xevent(self) -> None:
+        source = Path(smoke.__file__).read_text(encoding="utf-8")
+        self.assertIn('"--debug-swipe-identity"', source)
+        self.assertNotIn('"--debug-click-identity"', source)
+
     def test_one_route_checks_detail_back_idle_and_exact_workarea(self) -> None:
         clock = FakeClock()
         stage = 0
