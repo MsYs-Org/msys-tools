@@ -49,6 +49,9 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
                     "workarea": {"x": 0, "y": 42, "width": 320, "height": 396},
                     "display_consistent": True,
                 }
+            elif target == "msys.core" and method == "stop":
+                self.assertEqual(payload["component"], smoke.COMPONENT)
+                result = {"state": "stopped"}
             elif target == "msys.core" and method == "start":
                 self.assertEqual(payload["component"], smoke.COMPONENT)
                 result = {"state": "ready"}
@@ -93,6 +96,10 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
         self.assertTrue(document["frames"]["idle_unchanged"])
         self.assertEqual(document["frames"]["open_present_delta"], 1)
         self.assertEqual(document["window"]["geometry"]["height"], 396)
+        self.assertEqual(
+            [row["step"] for row in document["operations"][:4]],
+            ["layout", "stop", "start", "window"],
+        )
 
 
 class SettingsHostSmokeTests(unittest.TestCase):

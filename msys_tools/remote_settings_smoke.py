@@ -201,6 +201,10 @@ def run_settings_smoke(
             raise SettingsSmokeError(f"expected workarea {expected!r}, got {layout.get('workarea')!r}")
         document["layout"] = layout
 
+        # The smoke is an explicit cold-start acceptance.  Reset a previously
+        # opened detail page or scroll position instead of assuming that a
+        # repeated Core start returns a fresh UI instance.
+        rpc("msys.core", "stop", {"component": COMPONENT}, "stop")
         started = rpc("msys.core", "start", {"component": COMPONENT}, "start")
         if started.get("state") != "ready" or isinstance(started.get("activation_error"), dict):
             raise SettingsSmokeError("Settings LVGL component did not become ready")

@@ -516,7 +516,7 @@ function Invoke-SettingsSmoke {
     if ([string]$document.schema -ne "msys.settings-smoke.v1") {
         throw "settings-smoke returned the wrong schema"
     }
-    if ($null -ne $screenshot) {
+    if ($null -ne $screenshot -and $document.ok -eq $true) {
         $output = [IO.Path]::GetFullPath($screenshot)
         if ((Test-Path -LiteralPath $output) -and -not $force) { throw "output exists; pass --force: $output" }
         [IO.Directory]::CreateDirectory((Split-Path -Parent $output)) | Out-Null
