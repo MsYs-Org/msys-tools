@@ -804,7 +804,7 @@ class P0UIAcceptanceTests(unittest.TestCase):
             proc = Path(temporary)
             for pid, component, rss, pss in (
                 (100, "", 10000, 7000),
-                (101, "org.msys.shell.native:desktop-shell", 6000, 3000),
+                (101, "org.msys.shell.native:desktop-shell-lvgl", 6000, 3000),
                 (102, "org.msys.notes:notes", 8000, 5000),
             ):
                 directory = proc / str(pid)

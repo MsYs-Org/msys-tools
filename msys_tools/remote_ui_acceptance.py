@@ -331,12 +331,15 @@ def collect_process_memory(
         except OSError as exc:
             core_pids = []
             core_error = str(exc)
+    shell_pids = component_pids.get(
+        "org.msys.shell.native:desktop-shell-lvgl", []
+    ) or component_pids.get("org.msys.shell.native:desktop-shell", [])
     wanted = [
         ("core", "msys.core", list(core_pids)),
         (
             "native_shell",
             "org.msys.shell.native:desktop-shell",
-            component_pids.get("org.msys.shell.native:desktop-shell", []),
+            shell_pids,
         ),
         (
             "native_hal",
