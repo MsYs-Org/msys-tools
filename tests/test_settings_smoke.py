@@ -24,6 +24,9 @@ class FakeClock:
 
 
 class SettingsRemoteSmokeTests(unittest.TestCase):
+    def test_smoke_targets_the_single_production_component(self) -> None:
+        self.assertEqual(smoke.COMPONENT, "org.msys.settings:main")
+
     def test_present_property_has_eight_fields_and_monotonic_count(self) -> None:
         value = smoke.parse_present(
             "_MSYS_LVGL_LAST_PRESENT = 0, 0, 320, 396, 3, 126720, 0, 17\n"

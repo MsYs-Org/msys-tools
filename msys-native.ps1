@@ -41,8 +41,8 @@ MSYS native Windows path (no WSL)
   .\msys.cmd --native screenshot .\artifacts\home.png
   .\msys.cmd --native settings-smoke --screenshot .\artifacts\settings.png --force
   .\msys.cmd --native components
-  .\msys.cmd --native start org.msys.settings:main-lvgl
-  .\msys.cmd --native stop org.msys.settings:main-lvgl
+  .\msys.cmd --native start org.msys.settings:main
+  .\msys.cmd --native stop org.msys.settings:main
   .\msys.cmd --native select-role input-method org.msys.input.touch:keyboard-lvgl
   .\msys.cmd --native call role:hal list_devices {}
 

@@ -18,7 +18,7 @@ from .remote_x11_debug import resolve_display
 
 
 SCHEMA = "msys.settings-smoke.v1"
-COMPONENT = "org.msys.settings:main-lvgl"
+COMPONENT = "org.msys.settings:main"
 IDENTITY = "org.msys.settings"
 PRESENT_PROPERTY = "_MSYS_LVGL_LAST_PRESENT"
 PRESENT_RE = re.compile(r"=\s*([0-9]+(?:\s*,\s*[0-9]+){7})\s*$")

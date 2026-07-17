@@ -735,7 +735,7 @@ For the much shorter Settings migration loop, use one command after delivery:
 .\msys.cmd settings-smoke --screenshot .\artifacts\settings.png --force
 ```
 
-`settings-smoke` starts `org.msys.settings:main-lvgl`, requires the physical
+`settings-smoke` starts the production `org.msys.settings:main`, requires the physical
 320x480 mobile layout and exact `0,42,320,396` workarea, checks the stable X11
 identity, opens the first secondary page through an ordinary X11 touch and
 returns through its UI Back control. It waits for each LVGL transition to
