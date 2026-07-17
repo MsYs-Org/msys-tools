@@ -1151,3 +1151,19 @@ preflight, Core reload, critical health, and failure-recovery transaction as an
 install. The command waits for that terminal reply and fails when no compatible
 previous version can be activated. Progress and terminal events remain
 available for observers, but are no longer used as command acknowledgement.
+
+### Windows native board build (no WSL)
+
+When the workstation has no usable Python or WSL startup is slow, the small
+PowerShell fast path uploads one source archive and builds directly with the
+board's isolated compiler/runtime:
+
+```powershell
+$env:MSYS_DEV_TARGET = "root@192.168.1.215"
+$env:MSYS_DEV_SSH_KEY = "G:\Code\MsYs\.dev_ed25519"
+.\scripts\dev-native.ps1 -Mode sync-build-test
+```
+
+`sync`, `build`, and `test` can also be run independently. The script uses only
+Windows OpenSSH and `tar.exe`; it does not install host packages or introduce
+systemd/D-Bus runtime dependencies.
