@@ -505,7 +505,6 @@ function Invoke-SettingsSmoke {
         " --runtime-dir " + (Quote-Sh $script:Config.runtime_dir) +
         " --timeout " + (Quote-Sh $timeoutText) +
         " --display " + (Quote-Sh $script:Config.display) +
-        " --policy-binary " + (Quote-Sh ($script:Config.remote + "/msys-x11-session/bin/msys-x11-policy")) +
         " --display-log " + (Quote-Sh $displayLog)
     )
     if ($null -ne $screenshot) { $remoteCommand += " --capture" }

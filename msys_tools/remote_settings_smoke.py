@@ -31,7 +31,6 @@ class SettingsSmokeError(RuntimeError):
 
 RpcCallable = Callable[..., dict[str, Any]]
 PresentCallable = Callable[[str], tuple[int, ...]]
-TapCallable = Callable[[int, int], None]
 SleepCallable = Callable[[float], None]
 
 
@@ -117,37 +116,6 @@ def _wait_present_after(
     raise SettingsSmokeError("touch produced no completed LVGL frame")
 
 
-def _default_tap(policy_binary: str, display: str) -> TapCallable:
-    binary = Path(policy_binary)
-    if not binary.is_absolute() or not binary.is_file() or not os.access(binary, os.X_OK):
-        raise SettingsSmokeError(f"X11 policy helper is unavailable: {binary}")
-
-    def tap(x: int, y: int) -> None:
-        result = subprocess.run(
-            [
-                str(binary),
-                "--debug-swipe-identity",
-                IDENTITY,
-                str(x),
-                str(y),
-                str(x),
-                str(y),
-                "32",
-            ],
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=4,
-            env={**os.environ, "DISPLAY": display},
-        )
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout).strip()[-300:]
-            raise SettingsSmokeError(f"Settings XTEST tap failed: {detail}")
-
-    return tap
-
-
 def _window(payload: dict[str, Any]) -> dict[str, Any] | None:
     windows = payload.get("windows")
     if not isinstance(windows, list):
@@ -167,12 +135,10 @@ def run_settings_smoke(
     *,
     timeout: float = 12.0,
     display: str | None = None,
-    policy_binary: str = "/opt/msys-dev/msys-x11-session/bin/msys-x11-policy",
     display_log: str = "/tmp/ch347_dirty_usb_x11/live.log",
     capture: bool = False,
     rpc_call: RpcCallable | None = None,
     present_reader: PresentCallable | None = None,
-    tapper: TapCallable | None = None,
     sleep: SleepCallable = time.sleep,
 ) -> tuple[int, dict[str, Any]]:
     caller = rpc_call or call
@@ -243,15 +209,20 @@ def run_settings_smoke(
             if present_reader is not None
             else (lambda: xprop_present(active_display, xid))
         )
-        tap = tapper or _default_tap(policy_binary, active_display)
-
-        home = _wait_stable(read, timeout, sleep)
-        tap(72, 132)
+        home = _wait_stable(read, timeout, sleep, quiet=0.8)
+        rpc(
+            "msys.core",
+            "activate",
+            {"action": "settings-panel", "name": "wifi", "component": COMPONENT},
+            "activate",
+        )
         opened = _wait_present_after(read, home[7], timeout, sleep)
-        detail = _wait_stable(read, timeout, sleep)
-        tap(20, 20)
+        detail = _wait_stable(read, timeout, sleep, quiet=0.8)
+        back = rpc("msys.core", "navigation_back", {}, "back")
+        if back.get("handled") is not True:
+            raise SettingsSmokeError("Settings navigation_back did not return to Home")
         returned = _wait_present_after(read, detail[7], timeout, sleep)
-        final = _wait_stable(read, timeout, sleep)
+        final = _wait_stable(read, timeout, sleep, quiet=0.8)
         if final[7] <= home[7]:
             raise SettingsSmokeError("secondary-page route did not complete")
 
@@ -312,7 +283,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--display")
-    parser.add_argument("--policy-binary", required=True)
     parser.add_argument("--display-log", default="/tmp/ch347_dirty_usb_x11/live.log")
     parser.add_argument("--capture", action="store_true")
     return parser
@@ -324,7 +294,6 @@ def main(argv: list[str] | None = None) -> int:
         args.runtime_dir,
         timeout=args.timeout,
         display=args.display,
-        policy_binary=args.policy_binary,
         display_log=args.display_log,
         capture=args.capture,
     )

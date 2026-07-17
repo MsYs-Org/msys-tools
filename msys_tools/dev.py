@@ -4889,8 +4889,6 @@ def command_settings_smoke(
         runtime_dir,
         "--timeout",
         f"{timeout:g}",
-        "--policy-binary",
-        f"{ctx.remote}/msys-x11-session/bin/msys-x11-policy",
         "--display-log",
         display_log,
     ]

@@ -34,9 +34,10 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
         self.assertEqual(value[-1], 17)
         self.assertEqual(value[2:4], (320, 396))
 
-    def test_real_tap_uses_server_input_instead_of_ignored_synthetic_xevent(self) -> None:
+    def test_smoke_uses_typed_activation_and_back_not_screen_coordinates(self) -> None:
         source = Path(smoke.__file__).read_text(encoding="utf-8")
-        self.assertIn('"--debug-swipe-identity"', source)
+        self.assertIn('"settings-panel"', source)
+        self.assertIn('"navigation_back"', source)
         self.assertNotIn('"--debug-click-identity"', source)
 
     def test_one_route_checks_detail_back_idle_and_exact_workarea(self) -> None:
@@ -44,6 +45,7 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
         stage = 0
 
         def rpc(_runtime, target, method, payload, **_kwargs):
+            nonlocal stage
             if target == "role:window-manager" and method == "get_layout":
                 result = {
                     "schema": "msys.layout.v1",
@@ -60,6 +62,13 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
             elif target == "msys.core" and method == "start":
                 self.assertEqual(payload["component"], smoke.COMPONENT)
                 result = {"state": "ready"}
+            elif target == "msys.core" and method == "activate":
+                self.assertEqual(payload["name"], "wifi")
+                stage += 1
+                result = {"component": smoke.COMPONENT, "state": "ready"}
+            elif target == "msys.core" and method == "navigation_back":
+                stage += 1
+                result = {"handled": True, "component": smoke.COMPONENT}
             else:
                 result = {
                     "windows": [
@@ -78,10 +87,6 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
         def present(_xid: str) -> tuple[int, ...]:
             return (0, 0, 320, 396, 1, 126720, 0, stage + 1)
 
-        def tap(_x: int, _y: int) -> None:
-            nonlocal stage
-            stage += 1
-
         with (
             mock.patch.object(smoke.time, "monotonic", side_effect=clock.monotonic),
             mock.patch.object(smoke, "resolve_display", return_value=":24"),
@@ -92,7 +97,6 @@ class SettingsRemoteSmokeTests(unittest.TestCase):
                 "/tmp/msys-main",
                 rpc_call=rpc,
                 present_reader=present,
-                tapper=tap,
                 sleep=clock.sleep,
             )
 
