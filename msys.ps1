@@ -50,6 +50,7 @@ MSYS Windows development shortcut
   .\msys.cmd storage                        # one-SSH read-only space/USB cleanup plan
   .\msys.cmd accept                           # persistent broker + one read-only acceptance
   .\msys.cmd ui-accept                        # one-SSH reversible P0 UI route
+  .\msys.cmd settings-smoke --screenshot .\artifacts\settings.png
   .\msys.cmd fast --repo msys-settings --deliver --screenshot .\artifacts\settings.png
   .\msys.cmd quick --repo msys-settings --status  # sync/build + current health
   .\msys.cmd quick --repo msys-shell-native       # unchanged source skips upload/build
@@ -777,6 +778,11 @@ switch ($Command.ToLowerInvariant()) {
     { $_ -in @("ui-accept", "p0-ui") } {
         $fastBrokerDefault = $true
         $cliArgs = @("ui-accept") + $translatedArgs
+        break
+    }
+    "settings-smoke" {
+        $fastBrokerDefault = $true
+        $cliArgs = @("settings-smoke") + $translatedArgs
         break
     }
     "call" {

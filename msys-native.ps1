@@ -39,6 +39,7 @@ MSYS native Windows path (no WSL)
   .\msys.cmd --native ssh
   .\msys.cmd --native tail
   .\msys.cmd --native screenshot .\artifacts\home.png
+  .\msys.cmd --native settings-smoke --screenshot .\artifacts\settings.png --force
   .\msys.cmd --native components
   .\msys.cmd --native start org.msys.settings:main-lvgl
   .\msys.cmd --native stop org.msys.settings:main-lvgl
@@ -486,6 +487,60 @@ function Save-Screenshot {
     Write-Host "[ok] screenshot $output"
 }
 
+function Invoke-SettingsSmoke {
+    param([string[]]$Arguments)
+    $timeoutText = Get-OptionValue $Arguments "--timeout"
+    if ($null -eq $timeoutText) { $timeoutText = "12" }
+    $timeout = 0.0
+    if (-not [double]::TryParse($timeoutText, [ref]$timeout) -or $timeout -le 0 -or $timeout -gt 120) {
+        throw "--timeout must be greater than zero and at most 120 seconds"
+    }
+    $screenshot = Get-OptionValue $Arguments "--screenshot"
+    $displayLog = Get-OptionValue $Arguments "--display-log"
+    if ($null -eq $displayLog) { $displayLog = "/tmp/ch347_dirty_usb_x11/live.log" }
+    $force = $Arguments -contains "--force"
+    $remoteCommand = (
+        "set -u; " + (Get-RemotePythonPrelude) + "; " +
+        (Get-RemotePythonInvocation) + " -m msys_tools.remote_settings_smoke" +
+        " --runtime-dir " + (Quote-Sh $script:Config.runtime_dir) +
+        " --timeout " + (Quote-Sh $timeoutText) +
+        " --display " + (Quote-Sh $script:Config.display) +
+        " --policy-binary " + (Quote-Sh ($script:Config.remote + "/msys-x11-session/bin/msys-x11-policy")) +
+        " --display-log " + (Quote-Sh $displayLog)
+    )
+    if ($null -ne $screenshot) { $remoteCommand += " --capture" }
+    # The JSON report is useful on failure too; keep SSH successful and apply
+    # the smoke status after decoding the one remote reply.
+    $remoteCommand += "; status=`$?; exit 0"
+    $document = Invoke-SshCapture $remoteCommand | ConvertFrom-Json
+    if ([string]$document.schema -ne "msys.settings-smoke.v1") {
+        throw "settings-smoke returned the wrong schema"
+    }
+    if ($null -ne $screenshot) {
+        $output = [IO.Path]::GetFullPath($screenshot)
+        if ((Test-Path -LiteralPath $output) -and -not $force) { throw "output exists; pass --force: $output" }
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $output)) | Out-Null
+        try { $png = [Convert]::FromBase64String([string]$document.screenshot.png_base64) }
+        catch { throw "settings-smoke returned an invalid screenshot encoding" }
+        $signature = [byte[]](0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a)
+        if ($png.Length -lt 8 -or [BitConverter]::ToString($png, 0, 8) -ne [BitConverter]::ToString($signature)) {
+            throw "settings-smoke returned a non-PNG screenshot"
+        }
+        $temporary = $output + "." + [Guid]::NewGuid().ToString("N") + ".part"
+        try {
+            [IO.File]::WriteAllBytes($temporary, $png)
+            Move-Item -LiteralPath $temporary -Destination $output -Force:$force
+        } finally {
+            Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        }
+        $document.screenshot.PSObject.Properties.Remove("png_base64")
+        $document.screenshot | Add-Member -NotePropertyName saved -NotePropertyValue $output
+    }
+    $document | ConvertTo-Json -Depth 12
+    if ($document.ok -ne $true) { throw "settings-smoke failed: $($document.error)" }
+    Write-Host "[ok] settings LVGL smoke"
+}
+
 $script:Config = Read-NativeConfig
 $commandName = $Command.ToLowerInvariant()
 switch ($commandName) {
@@ -550,5 +605,6 @@ switch ($commandName) {
         exit 0
     }
     "screenshot" { Save-Screenshot $NativeArgs; exit 0 }
+    "settings-smoke" { Invoke-SettingsSmoke $NativeArgs; exit 0 }
     default { throw "unsupported native command '$Command'; run --native help" }
 }

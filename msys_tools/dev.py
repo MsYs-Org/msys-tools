@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import contextlib
 import hashlib
 import io
@@ -4843,6 +4845,103 @@ def command_ui_acceptance(
     return result.returncode
 
 
+def command_settings_smoke(
+    ctx: Context,
+    runtime_dir: str,
+    *,
+    timeout: float,
+    display: str | None,
+    display_log: str,
+    screenshot: Path | None,
+    force: bool,
+) -> int:
+    """Exercise Settings home/detail/back/idle in one target process and SSH."""
+
+    if not 0 < timeout <= 120:
+        print("settings-smoke: timeout must be greater than zero and at most 120 seconds", file=sys.stderr)
+        return 2
+    if display is not None and X11_DISPLAY_PATTERN.fullmatch(display) is None:
+        print("settings-smoke: DISPLAY must use the local X11 form :N or :N.S", file=sys.stderr)
+        return 2
+    resolved_output: Path | None = None
+    if screenshot is not None:
+        resolved_output = screenshot.expanduser()
+        if resolved_output.is_symlink():
+            print("settings-smoke: refusing a symlink screenshot path", file=sys.stderr)
+            return 2
+        resolved_output = resolved_output.resolve()
+        if resolved_output.exists() and (resolved_output.is_dir() or not force):
+            reason = "output is a directory" if resolved_output.is_dir() else "output exists; pass --force"
+            print(f"settings-smoke: {reason}: {resolved_output}", file=sys.stderr)
+            return 2
+        try:
+            resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            print(f"settings-smoke: cannot create screenshot directory: {exc}", file=sys.stderr)
+            return 2
+
+    argv = [
+        ctx.remote_python,
+        "-B",
+        "-m",
+        "msys_tools.remote_settings_smoke",
+        "--runtime-dir",
+        runtime_dir,
+        "--timeout",
+        f"{timeout:g}",
+        "--policy-binary",
+        f"{ctx.remote}/msys-x11-session/bin/msys-x11-policy",
+        "--display-log",
+        display_log,
+    ]
+    if display is not None:
+        argv.extend(["--display", display])
+    if resolved_output is not None:
+        argv.append("--capture")
+    command = (
+        "PYTHONDONTWRITEBYTECODE=1 "
+        f"PYTHONPATH={quote_sh(ctx.remote + '/msys-tools')} "
+        + " ".join(quote_sh(value) for value in argv)
+    )
+    result = ssh_capture(ctx, command, display_command="<one-pass Settings LVGL smoke>")
+    try:
+        document = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        if result.stdout:
+            print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+        print("settings-smoke: target returned invalid JSON", file=sys.stderr)
+        return result.returncode or 2
+    if not isinstance(document, dict) or document.get("schema") != "msys.settings-smoke.v1":
+        print("settings-smoke: target returned the wrong schema", file=sys.stderr)
+        return result.returncode or 2
+
+    screenshot_record = document.get("screenshot")
+    if resolved_output is not None:
+        encoded = screenshot_record.get("png_base64") if isinstance(screenshot_record, dict) else None
+        try:
+            png = base64.b64decode(encoded, validate=True) if isinstance(encoded, str) else b""
+        except (binascii.Error, ValueError):
+            png = b""
+        if not (png.startswith(PNG_SIGNATURE) and len(png) <= MAX_SCREENSHOT_BYTES):
+            print("settings-smoke: target returned an invalid PNG", file=sys.stderr)
+            return result.returncode or 2
+        temporary = resolved_output.with_name(resolved_output.name + f".{secrets.token_hex(8)}.part")
+        try:
+            temporary.write_bytes(png)
+            _commit_screenshot(temporary, resolved_output, force=force)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            print(f"settings-smoke: cannot save screenshot: {exc}", file=sys.stderr)
+            return result.returncode or 2
+        assert isinstance(screenshot_record, dict)
+        screenshot_record.pop("png_base64", None)
+        screenshot_record["saved"] = str(resolved_output)
+    elif isinstance(screenshot_record, dict):
+        screenshot_record.pop("png_base64", None)
+    print(json.dumps(document, ensure_ascii=False, indent=2))
+    return result.returncode
+
+
 def _normalise_remote_release_root(value: str) -> str:
     path = PurePosixPath(value)
     if (
@@ -6560,6 +6659,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ui_accept.add_argument("--runtime-dir")
 
+    settings_smoke = sub.add_parser(
+        "settings-smoke",
+        parents=[common],
+        help=(
+            "start Settings LVGL and verify 320x480 geometry, a secondary-page "
+            "round trip, idle flushes, SPI dirty counters, and RSS/PSS in one SSH"
+        ),
+    )
+    settings_smoke.add_argument("--timeout", type=_bounded_timeout, default=12.0)
+    settings_smoke.add_argument("--display")
+    settings_smoke.add_argument(
+        "--display-log", default="/tmp/ch347_dirty_usb_x11/live.log"
+    )
+    settings_smoke.add_argument("--runtime-dir")
+    settings_smoke.add_argument("--screenshot", nargs="?", const="", metavar="PATH")
+    settings_smoke.add_argument("--force", action="store_true")
+
     notify = sub.add_parser("notify", parents=[common])
     notify.add_argument("message")
     notify.add_argument("--timeout-ms", type=_bounded_notify_timeout, default=2500)
@@ -7410,6 +7526,20 @@ def main(argv: list[str] | None = None) -> int:
             args.runtime_dir or config.get("runtime_dir", "/run/msys/main"),
             timeout=args.timeout,
             display_log=args.display_log,
+        )
+    if args.command == "settings-smoke":
+        return command_settings_smoke(
+            ctx,
+            args.runtime_dir or config.get("runtime_dir", "/run/msys/main"),
+            timeout=args.timeout,
+            display=args.display,
+            display_log=args.display_log,
+            screenshot=(
+                screenshot_output(args.screenshot)
+                if args.screenshot is not None
+                else None
+            ),
+            force=args.force,
         )
     if args.command == "notify":
         return command_broadcast(

@@ -727,6 +727,27 @@ record is included under `dirty_stats`. This is evidence-only: an older sink
 without that record does not fail UI acceptance. The command does not switch
 releases, install packages, change layout, inject input, or retain screenshots.
 
+For the much shorter Settings migration loop, use one command after delivery:
+
+```powershell
+.\msys.cmd --native settings-smoke --screenshot .\artifacts\settings.png --force
+# The WSL/broker path exposes the same route:
+.\msys.cmd settings-smoke --screenshot .\artifacts\settings.png --force
+```
+
+`settings-smoke` starts `org.msys.settings:main-lvgl`, requires the physical
+320x480 mobile layout and exact `0,42,320,396` workarea, checks the stable X11
+identity, opens the first secondary page through an ordinary X11 touch and
+returns through its UI Back control. It waits for each LVGL transition to
+settle, then requires `_MSYS_LVGL_LAST_PRESENT` to remain unchanged for an idle
+interval and rejects any simultaneous increase in the CH347 sink's cumulative
+large/full refresh counters. The same single target process reports transition
+present counts and Core/Shell/HAL/Settings RSS/PSS. `--screenshot` is captured
+after the round trip and returned inside that one SSH response, so routine
+Settings acceptance no longer needs separate start, tap, screenshot, log and
+memory commands. This is an LVGL/X11/SPI source-frame check; physical ST7796 TE
+sync remains a display-provider/hardware concern.
+
 The native policy follows live X11 resolution and can switch mobile, kiosk, or
 desktop placement without restarting applications:
 
